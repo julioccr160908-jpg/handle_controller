@@ -1,20 +1,23 @@
-"""Composite executor routing actions to specialized executors (Phase 4 & 5).
+"""Composite executor routing actions to specialized executors (Phase 4, 5, & 6).
 
 Routes:
 - Mouse actions (cursor_move, click_*, drag_*, scroll) → MouseExecutor
 - Keyboard & media actions (shortcut, shortcut_*, media_*, volume_*, key_*) → KeyboardExecutor
+- Window management (window_grab, window_release, window_minimize, window_maximize, etc.) → WindowExecutor
 
 Guarantees that ``release_all()`` calls ``release_all()`` on all sub-executors,
-ensuring that neither mouse buttons nor keyboard keys remain stuck.
+ensuring that neither mouse buttons, keyboard keys, nor window drag sessions remain stuck.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 
 from handcontrol.actions.base import BaseExecutor
 from handcontrol.actions.keyboard_executor import KeyboardExecutor
 from handcontrol.actions.mouse_executor import MouseExecutor
+from handcontrol.actions.window_executor import WindowExecutor
 from handcontrol.tracking.models import ActionRequest, ActionResult, ActionStatus
 
 logger = logging.getLogger(__name__)
@@ -52,17 +55,31 @@ _KEYBOARD_ACTIONS = frozenset(
     }
 )
 
+_WINDOW_ACTIONS = frozenset(
+    {
+        "window_grab",
+        "window_release",
+        "window_minimize",
+        "window_maximize",
+        "window_restore",
+        "window_toggle_maximize",
+        "window_move_to_monitor",
+    }
+)
+
 
 class CompositeExecutor(BaseExecutor):
-    """Coordinates specialized executors for mouse, keyboard, and media actions."""
+    """Coordinates specialized executors for mouse, keyboard, and window actions."""
 
     def __init__(
         self,
         mouse_executor: MouseExecutor | None = None,
         keyboard_executor: KeyboardExecutor | None = None,
+        window_executor: WindowExecutor | None = None,
     ) -> None:
         self.mouse = mouse_executor or MouseExecutor()
         self.keyboard = keyboard_executor or KeyboardExecutor()
+        self.window = window_executor or WindowExecutor()
 
     def execute(self, request: ActionRequest) -> ActionResult:
         """Route action request to the appropriate sub-executor."""
@@ -74,17 +91,16 @@ class CompositeExecutor(BaseExecutor):
         if name in _KEYBOARD_ACTIONS:
             return self.keyboard.execute(request)
 
-        if name == "noop":
-            import time
+        if name in _WINDOW_ACTIONS:
+            return self.window.execute(request)
 
+        if name == "noop":
             return ActionResult(
                 action_name=name,
                 status=ActionStatus.EXECUTED,
                 reason="noop",
                 timestamp=time.monotonic(),
             )
-
-        import time
 
         return ActionResult(
             action_name=name,
@@ -94,7 +110,7 @@ class CompositeExecutor(BaseExecutor):
         )
 
     def release_all(self) -> None:
-        """Release all held inputs across both mouse and keyboard executors."""
+        """Release all held inputs across mouse, keyboard, and window executors."""
         try:
             self.mouse.release_all()
         except Exception:
@@ -104,3 +120,8 @@ class CompositeExecutor(BaseExecutor):
             self.keyboard.release_all()
         except Exception:
             logger.exception("Error during keyboard release_all")
+
+        try:
+            self.window.release_all()
+        except Exception:
+            logger.exception("Error during window release_all")

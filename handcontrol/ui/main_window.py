@@ -25,6 +25,7 @@ import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -172,6 +173,7 @@ class MainWindow(QMainWindow):
         self._safety = SafetyManager(self._controller, self._mapper)
         self._metrics = PerformanceMetrics()
         self._confirmed_real_mode_in_session = False
+        self._selected_hwnd: int = 0
 
         # --- processing thread state ---
         self._processing = False
@@ -287,6 +289,74 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self._btn_calibrate)
 
         root.addLayout(top_bar)
+
+        # ── Window selection & manipulation bar (Section 8.1, 8.5) ────────
+        win_bar = QHBoxLayout()
+        win_bar.setSpacing(8)
+
+        win_lbl = QLabel("🪟 Alvo:")
+        win_lbl.setStyleSheet("font-weight: bold; font-size: 11px; color: #a0aec0;")
+        win_bar.addWidget(win_lbl)
+
+        self._window_combo = QComboBox()
+        self._window_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #1a1a2e;
+                color: #e0e0e0;
+                border: 1px solid #233554;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+                min-width: 260px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1a1a2e;
+                color: #e0e0e0;
+                selection-background-color: #0f3460;
+            }
+        """)
+        self._window_combo.addItem("🪟 Janela Ativa (Foco Automático)", userData=0)
+        self._window_combo.currentIndexChanged.connect(self._on_window_selected)
+        win_bar.addWidget(self._window_combo, stretch=1)
+
+        self._btn_refresh_windows = QPushButton("🔄")
+        self._btn_refresh_windows.setToolTip("Atualizar lista de janelas elegíveis")
+        self._btn_refresh_windows.setStyleSheet("""
+            QPushButton {
+                background-color: #233554;
+                color: white;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #3b5066; }
+        """)
+        self._btn_refresh_windows.clicked.connect(self._refresh_window_list)
+        win_bar.addWidget(self._btn_refresh_windows)
+
+        # Quick window actions
+        for icon_text, action_id, tip in [
+            ("🗕", "window_minimize", "Minimizar janela"),
+            ("🗖", "window_toggle_maximize", "Maximizar/Restaurar janela"),
+            ("🖥", "window_move_to_monitor", "Transferir para próximo monitor"),
+        ]:
+            btn = QPushButton(icon_text)
+            btn.setToolTip(tip)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #16213e;
+                    color: white;
+                    border: 1px solid #233554;
+                    border-radius: 4px;
+                    padding: 4px 10px;
+                    font-size: 11px;
+                }
+                QPushButton:hover { background-color: #0f3460; }
+            """)
+            btn.clicked.connect(lambda checked=False, a=action_id: self._trigger_window_action(a))
+            win_bar.addWidget(btn)
+
+        root.addLayout(win_bar)
 
         # ── Main content: video + history side by side ────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -502,6 +572,53 @@ class MainWindow(QMainWindow):
         """Open the active region calibration dialog."""
         dlg = ActiveRegionDialog(self._region, self)
         dlg.exec()
+
+    @Slot(int)
+    def _on_window_selected(self, index: int) -> None:
+        """Handle window selection change from combobox."""
+        self._selected_hwnd = self._window_combo.currentData() or 0
+        if self._selected_hwnd and hasattr(self._real_executor, "window"):
+            info = self._real_executor.window.wm._inspect_window(self._selected_hwnd)
+            if info and info.is_elevated:
+                self._add_history_entry(
+                    ActionResult(
+                        action_name="window_select",
+                        status=ActionStatus.REFUSED,
+                        reason="⚠ Janela elevada (Admin) — requer privilégios",
+                        timestamp=time.monotonic(),
+                    )
+                )
+
+    @Slot()
+    def _refresh_window_list(self) -> None:
+        """Refresh the list of eligible application windows in the combobox."""
+        current_hwnd = self._selected_hwnd
+        self._window_combo.blockSignals(True)
+        self._window_combo.clear()
+        self._window_combo.addItem("🪟 Janela Ativa (Foco Automático)", userData=0)
+
+        wm = getattr(self._real_executor, "window", None)
+        if wm:
+            windows = wm.wm.list_eligible_windows()
+            selected_idx = 0
+            for i, w in enumerate(windows, start=1):
+                prefix = "🛡 [Admin] " if w.is_elevated else ""
+                title_short = (w.title[:35] + "…") if len(w.title) > 35 else w.title
+                self._window_combo.addItem(f"{prefix}{title_short}", userData=w.hwnd)
+                if w.hwnd == current_hwnd:
+                    selected_idx = i
+            self._window_combo.setCurrentIndex(selected_idx)
+
+        self._window_combo.blockSignals(False)
+
+    def _trigger_window_action(self, action_name: str) -> None:
+        """Trigger an explicit window management action from UI."""
+        params: dict[str, int] = {}
+        if self._selected_hwnd:
+            params["hwnd"] = self._selected_hwnd
+        req = ActionRequest(action_name=action_name, parameters=params, source_gesture="ui_button")
+        res = self._controller.submit(req)
+        self._add_history_entry(res)
 
     @Slot()
     def _on_toggle_real_mode(self) -> None:
@@ -832,6 +949,41 @@ class MainWindow(QMainWindow):
                     self._cursor_controller.on_hand_lost()
                     if not self._safety.simulation_mode:
                         self._controller._executor.release_all()
+
+                # Window drag control (left hand fist gesture, Section 8.2)
+                left_obs = next((obs for obs in hand_frame.hands if obs.handedness == "Left"), None)
+                if left_obs and len(left_obs.landmarks) > 0:
+                    lm = (
+                        left_obs.landmarks[9]
+                        if len(left_obs.landmarks) > 9
+                        else left_obs.landmarks[0]
+                    )
+                    lx, ly = self._region.map_normalized(lm.x, lm.y)
+
+                    # If window_grab was requested, inject hand coordinates
+                    for req in requests:
+                        if req.action_name == "window_grab" and "x" not in req.parameters:
+                            req.parameters["x"] = lx
+                            req.parameters["y"] = ly
+                            if self._selected_hwnd:
+                                req.parameters["hwnd"] = self._selected_hwnd
+
+                    # If drag session is active, update window position
+                    if (
+                        hasattr(self._real_executor, "window")
+                        and self._real_executor.window.drag.is_active
+                        and not self._safety.commands_paused
+                        and not self._safety.is_emergency
+                    ):
+                        self._real_executor.window.drag.update_hand_position(
+                            lx, ly, timestamp=hand_frame.timestamp
+                        )
+                else:
+                    if (
+                        hasattr(self._real_executor, "window")
+                        and self._real_executor.window.drag.is_active
+                    ):
+                        self._real_executor.window.drag.cancel_grab()
 
                 action_results = self._controller.submit_many(requests)
 

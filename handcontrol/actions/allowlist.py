@@ -133,15 +133,41 @@ _ALL_ACTIONS: list[ActionSpec] = [
         name="volume_mute",
         description="Toggle mute system audio volume.",
     ),
-    # --- Window management ---
+    # --- Window management (Section 8) ---
     ActionSpec(
         name="window_grab",
         description="Grab the active window for movement.",
         is_stateful=True,
+        optional_params=frozenset({"x", "y", "norm_x", "norm_y", "hwnd", "timestamp"}),
     ),
     ActionSpec(
         name="window_release",
         description="Release the grabbed window.",
+    ),
+    ActionSpec(
+        name="window_minimize",
+        description="Minimize the active or target window.",
+        optional_params=frozenset({"hwnd"}),
+    ),
+    ActionSpec(
+        name="window_maximize",
+        description="Maximize the active or target window.",
+        optional_params=frozenset({"hwnd"}),
+    ),
+    ActionSpec(
+        name="window_restore",
+        description="Restore the active or target window.",
+        optional_params=frozenset({"hwnd"}),
+    ),
+    ActionSpec(
+        name="window_toggle_maximize",
+        description="Toggle maximize/restore of the active or target window.",
+        optional_params=frozenset({"hwnd"}),
+    ),
+    ActionSpec(
+        name="window_move_to_monitor",
+        description="Move window to another monitor.",
+        optional_params=frozenset({"hwnd", "monitor_index"}),
     ),
     # --- System / media ---
     ActionSpec(

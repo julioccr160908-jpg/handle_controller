@@ -124,3 +124,29 @@ Antes de iniciar qualquer teste com **Modo Real** ativado:
 - [ ] **Passo 12.3:** Retire a mão da câmera ou pause o aplicativo no meio de uma ação.
   - *Resultado esperado:* `release_all()` é executado e todas as teclas são liberadas imediatamente.
 
+---
+
+### 13. Gerenciamento de Janelas e Multi-monitor (Fase 6)
+- [ ] **Passo 13.1 (Enumeração de Janelas):** No painel "Gerenciamento de Janelas", clique no botão **"🔄 Atualizar"**.
+  - *Resultado esperado:* O combobox lista todas as janelas abertas elegíveis (título visível, tamanho > 10x10), filtrando componentes internos do sistema (Progman, Shell_TrayWnd, etc.).
+- [ ] **Passo 13.2 (Arraste Relativo Sem Salto Inicial):**
+  - Selecione uma janela (ex: Bloco de Notas) ou deixe no modo automático (janela ativa).
+  - Feche o punho esquerdo (**Fist**) para agarrar a janela.
+  - *Resultado esperado:* A janela é agarrada instantaneamente. **Não há salto ou teletransporte** da janela ao fechar a mão (zero initial jump).
+  - Desloque a mão em qualquer direção: a janela segue proporcionalmente o movimento, limitada a 60 Hz.
+  - Abra a mão esquerda: a janela é solta e permanece na posição alcançada.
+- [ ] **Passo 13.3 (Perda de Rastreamento Durante Arraste):**
+  - Com a janela sendo arrastada pelo punho, retire a mão da câmera ou cubra a lente.
+  - *Resultado esperado:* O arraste é cancelado com segurança (`release_all`), mantendo a janela estável no último local válido.
+- [ ] **Passo 13.4 (Minimizar, Maximizar e Alternar):**
+  - Teste os botões rápidos no painel de janelas: **"Minimizar"**, **"Maximizar"** e **"Alternar"**.
+  - *Resultado esperado:* A janela selecionada responde imediatamente alternando entre os estados normais, minimizados e maximizados.
+- [ ] **Passo 13.5 (Transferência Multi-monitor):**
+  - Em um computador com 2 ou mais telas conectadas, selecione uma janela e clique em **"🖥️ Próximo Monitor"**.
+  - *Resultado esperado:* A janela é movida para a próxima tela em sequência circular, centralizada na área de trabalho e ajustada para caber no monitor de destino. Se estiver maximizada, é restaurada automaticamente antes da transferência.
+- [ ] **Passo 13.6 (Proteção contra Janelas Elevadas / Administrador):**
+  - Abra uma janela como Administrador (ex: PowerShell ou Gerenciador de Tarefas).
+  - Tente agarrá-la ou movê-la via HandControl rodando como usuário comum.
+  - *Resultado esperado:* A ação é recusada com aviso descritivo no histórico de ações (`Janela pertence a um processo elevado (Administrador)...`), prevenindo bloqueios silenciosos de UIPI.
+
+
