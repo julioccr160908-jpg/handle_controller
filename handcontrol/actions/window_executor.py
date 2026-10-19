@@ -31,10 +31,15 @@ class WindowExecutor(BaseExecutor):
         self,
         window_manager: WindowManager | None = None,
         virtual_desktop: VirtualDesktop | None = None,
+        drag_sensitivity: float = 1.6,
     ) -> None:
         self.wm = window_manager or WindowManager()
         self.desktop = virtual_desktop or enumerate_monitors()
-        self.drag = WindowDragSession(window_manager=self.wm, virtual_desktop=self.desktop)
+        self.drag = WindowDragSession(
+            window_manager=self.wm,
+            virtual_desktop=self.desktop,
+            drag_sensitivity=drag_sensitivity,
+        )
 
     def execute(self, request: ActionRequest) -> ActionResult:
         """Execute a window management action."""

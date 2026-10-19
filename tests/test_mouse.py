@@ -313,6 +313,34 @@ class TestCursorController:
         upd2 = ctrl.update(0.82, 0.82, clutch_on=True, timestamp=2.05)
         assert upd2.moved
 
+    def test_dead_zone_ramp_and_sensitivity(self):
+        reg = ActiveRegion(
+            left_frac=0.0,
+            top_frac=0.0,
+            right_frac=1.0,
+            bottom_frac=1.0,
+            screen_width=1000,
+            screen_height=1000,
+        )
+        ctrl = CursorController(
+            region=reg,
+            config=CursorConfig(dead_zone_px=10.0, sensitivity=0.8, smoothing_min_cutoff=100.0),
+        )
+        # Initialize at center (500, 500)
+        ctrl.update(0.5, 0.5, clutch_on=True, timestamp=1.0)
+
+        # Micro-movement of 6px in X (below 10px dead zone): should not move
+        upd_small = ctrl.update(0.506, 0.5, clutch_on=True, timestamp=1.033)
+        assert not upd_small.moved
+        assert upd_small.x == 500.0
+
+        # Movement of 50px in X (above 10px dead zone):
+        # excess = 50 - 10 = 40; ratio = (40 / 50) * 0.8 = 0.64
+        # move = 50 * 0.64 = 32.0 -> target_x = 532.0
+        upd_large = ctrl.update(0.550, 0.5, clutch_on=True, timestamp=1.066)
+        assert upd_large.moved
+        assert upd_large.x == pytest.approx(530.4, abs=2.0)
+
 
 # ---------------------------------------------------------------------------
 # 4. MouseExecutor tests (with mocked SendInput)

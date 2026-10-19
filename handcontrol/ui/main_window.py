@@ -199,11 +199,16 @@ class MainWindow(QMainWindow):
 
         self._gesture_engine.preferred_hand = cfg.settings.preferred_hand
         self._cursor_controller.config.dead_zone_px = cfg.settings.dead_zone_px
+        self._cursor_controller.config.sensitivity = cfg.settings.cursor_sensitivity
         self._cursor_controller.smoother.filter_x.min_cutoff = cfg.settings.smoothing_min_cutoff
         self._cursor_controller.smoother.filter_x.beta = cfg.settings.smoothing_beta
         self._cursor_controller.smoother.filter_y.min_cutoff = cfg.settings.smoothing_min_cutoff
         self._cursor_controller.smoother.filter_y.beta = cfg.settings.smoothing_beta
         self._region.set_margins(*cfg.settings.active_region_margins)
+
+        drag_mgr = getattr(self._real_executor.window, "drag", None)
+        if drag_mgr is not None:
+            drag_mgr.drag_sensitivity = cfg.settings.drag_sensitivity
 
         active_p = next(
             (p for p in cfg.profiles if p.profile_id == cfg.active_profile_id),
@@ -1418,12 +1423,17 @@ class MainWindow(QMainWindow):
         """Callback when settings or profiles are saved in editor."""
         cfg = self.config_manager.config
         self._cursor_controller.config.dead_zone_px = cfg.settings.dead_zone_px
+        self._cursor_controller.config.sensitivity = cfg.settings.cursor_sensitivity
         self._cursor_controller.smoother.filter_x.min_cutoff = cfg.settings.smoothing_min_cutoff
         self._cursor_controller.smoother.filter_x.beta = cfg.settings.smoothing_beta
         self._cursor_controller.smoother.filter_y.min_cutoff = cfg.settings.smoothing_min_cutoff
         self._cursor_controller.smoother.filter_y.beta = cfg.settings.smoothing_beta
         self._gesture_engine.preferred_hand = cfg.settings.preferred_hand
         self._region.set_margins(*cfg.settings.active_region_margins)
+
+        drag_mgr = getattr(self._real_executor.window, "drag", None)
+        if drag_mgr is not None:
+            drag_mgr.drag_sensitivity = cfg.settings.drag_sensitivity
 
         self._refresh_profile_combo()
         active_p = next((p for p in cfg.profiles if p.profile_id == cfg.active_profile_id), None)

@@ -22,9 +22,11 @@ class GlobalSettings(BaseModel):
     camera_height: int = Field(default=480, ge=240)
     camera_fps: int = Field(default=30, ge=10, le=120)
     preferred_hand: str = Field(default="Right")
-    smoothing_min_cutoff: float = Field(default=1.0, gt=0.0)
+    smoothing_min_cutoff: float = Field(default=0.15, gt=0.0)
     smoothing_beta: float = Field(default=0.007, ge=0.0)
-    dead_zone_px: float = Field(default=3.0, ge=0.0)
+    dead_zone_px: float = Field(default=7.0, ge=0.0)
+    cursor_sensitivity: float = Field(default=0.85, ge=0.1, le=3.0)
+    drag_sensitivity: float = Field(default=1.6, ge=0.5, le=4.0)
     active_region_margins: tuple[float, float, float, float] = Field(
         default=(0.10, 0.10, 0.10, 0.10)
     )

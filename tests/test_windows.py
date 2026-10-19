@@ -651,6 +651,22 @@ class TestWindowDragSession:
         snapped = wm._inspect_window(10)
         assert snapped.rect == (1920, 0, 960, 1080)
 
+    def test_window_drag_sensitivity_amplification(self):
+        w = WindowInfo(hwnd=10, title="Editor", rect=(200, 200, 800, 600))
+        wm = MockWindowManager([w])
+        session = WindowDragSession(window_manager=wm, drag_sensitivity=1.6)
+
+        session.start_grab(hand_x=500.0, hand_y=500.0, target_hwnd=10, timestamp=1.0)
+        # Move hand by +100 in X and +50 in Y
+        session.update_hand_position(hand_x=600.0, hand_y=550.0, timestamp=1.03)
+
+        # Window displacement must be amplified by 1.6x:
+        # dx = 100 * 1.6 = 160 -> x = 200 + 160 = 360
+        # dy = 50 * 1.6 = 80 -> y = 200 + 80 = 280
+        moved = wm._inspect_window(10)
+        assert moved.x == 360
+        assert moved.y == 280
+
 
 # ---------------------------------------------------------------------------
 # 4. WindowExecutor Tests

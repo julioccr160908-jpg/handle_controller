@@ -400,7 +400,8 @@ class ProfileEditorDialog(QDialog):
 
         # Smoothing Cutoff
         self.spin_smooth_cutoff = QDoubleSpinBox()
-        self.spin_smooth_cutoff.setRange(0.1, 10.0)
+        self.spin_smooth_cutoff.setRange(0.01, 10.0)
+        self.spin_smooth_cutoff.setDecimals(2)
         self.spin_smooth_cutoff.setValue(self._cfg.settings.smoothing_min_cutoff)
         form.addRow("Filtro One Euro (Min Cutoff):", self.spin_smooth_cutoff)
 
@@ -417,6 +418,20 @@ class ProfileEditorDialog(QDialog):
         self.spin_dead_zone.setValue(self._cfg.settings.dead_zone_px)
         self.spin_dead_zone.setSuffix(" px")
         form.addRow("Zona Morta (Anti-tremor):", self.spin_dead_zone)
+
+        # Mouse Cursor Sensitivity
+        self.spin_mouse_sens = QDoubleSpinBox()
+        self.spin_mouse_sens.setRange(0.2, 3.0)
+        self.spin_mouse_sens.setSingleStep(0.05)
+        self.spin_mouse_sens.setValue(getattr(self._cfg.settings, "cursor_sensitivity", 0.85))
+        form.addRow("Sensibilidade do Mouse (Velocidade):", self.spin_mouse_sens)
+
+        # Window Drag Sensitivity
+        self.spin_drag_sens = QDoubleSpinBox()
+        self.spin_drag_sens.setRange(0.5, 4.0)
+        self.spin_drag_sens.setSingleStep(0.1)
+        self.spin_drag_sens.setValue(getattr(self._cfg.settings, "drag_sensitivity", 1.6))
+        form.addRow("Sensibilidade de Arrastar Janela:", self.spin_drag_sens)
 
         # Emergency Hotkey
         self.edit_hotkey = QLineEdit(self._cfg.settings.emergency_hotkey)
@@ -661,6 +676,8 @@ class ProfileEditorDialog(QDialog):
         s.smoothing_min_cutoff = self.spin_smooth_cutoff.value()
         s.smoothing_beta = self.spin_smooth_beta.value()
         s.dead_zone_px = self.spin_dead_zone.value()
+        s.cursor_sensitivity = self.spin_mouse_sens.value()
+        s.drag_sensitivity = self.spin_drag_sens.value()
         s.emergency_hotkey = self.edit_hotkey.text().strip()
         s.minimize_to_tray = self.chk_tray.isChecked()
 

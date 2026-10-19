@@ -39,15 +39,19 @@ class WindowDragSession:
         self,
         window_manager: WindowManager | None = None,
         virtual_desktop: VirtualDesktop | None = None,
+        drag_sensitivity: float = 1.0,
     ) -> None:
         self._wm = window_manager or WindowManager()
         self._desktop = virtual_desktop or enumerate_monitors()
+        self._drag_sensitivity: float = max(0.1, float(drag_sensitivity))
         self._active = False
         self._hwnd: int = 0
         self._offset_x: float = 0.0
         self._offset_y: float = 0.0
         self._initial_hand_x: float = 0.0
         self._initial_hand_y: float = 0.0
+        self._initial_win_x: int = 0
+        self._initial_win_y: int = 0
         self._last_hand_x: float = 0.0
         self._last_hand_y: float = 0.0
         self._last_win_x: int = 0
@@ -57,6 +61,15 @@ class WindowDragSession:
         self._has_moved: bool = False
         self._last_update_time: float = 0.0
         self._target_info: WindowInfo | None = None
+
+    @property
+    def drag_sensitivity(self) -> float:
+        """Sensitivity amplification factor for window movement (1.0 = 1:1 displacement)."""
+        return self._drag_sensitivity
+
+    @drag_sensitivity.setter
+    def drag_sensitivity(self, value: float) -> None:
+        self._drag_sensitivity = max(0.1, float(value))
 
     @property
     def is_active(self) -> bool:
@@ -125,6 +138,8 @@ class WindowDragSession:
         self._offset_y = float(info.y) - hand_y
         self._initial_hand_x = hand_x
         self._initial_hand_y = hand_y
+        self._initial_win_x = info.x
+        self._initial_win_y = info.y
         self._last_hand_x = hand_x
         self._last_hand_y = hand_y
         self._last_win_x = info.x
@@ -175,9 +190,11 @@ class WindowDragSession:
             # Coalesce: drop intermediate frame if updates arrive faster than 60 Hz
             return False
 
-        # Calculate target window position preserving initial grab offset
-        target_x = int(hand_x + self._offset_x)
-        target_y = int(hand_y + self._offset_y)
+        # Calculate target window position using drag sensitivity amplification
+        dx = hand_x - self._initial_hand_x
+        dy = hand_y - self._initial_hand_y
+        target_x = int(self._initial_win_x + self._drag_sensitivity * dx)
+        target_y = int(self._initial_win_y + self._drag_sensitivity * dy)
 
         # Skip redundant OS calls if position has not changed
         if target_x == self._last_win_x and target_y == self._last_win_y:
@@ -234,6 +251,13 @@ class WindowDragSession:
         hwnd = self._hwnd
 
         try:
+            eff_hand_x = self._initial_hand_x + self._drag_sensitivity * (
+                self._last_hand_x - self._initial_hand_x
+            )
+            eff_hand_y = self._initial_hand_y + self._drag_sensitivity * (
+                self._last_hand_y - self._initial_hand_y
+            )
+
             has_dragged = (
                 self._has_moved
                 or abs(self._last_hand_x - self._initial_hand_x) > 20
@@ -242,7 +266,9 @@ class WindowDragSession:
 
             if has_dragged:
                 # Identify monitor where hand/window is released
-                monitor = self._desktop.get_monitor_for_point(self._last_hand_x, self._last_hand_y)
+                monitor = self._desktop.get_monitor_for_point(eff_hand_x, eff_hand_y)
+                if not monitor:
+                    monitor = self._desktop.get_monitor_for_point(self._last_hand_x, self._last_hand_y)
                 if not monitor:
                     monitor = self._desktop.get_monitor_for_rect(
                         (self._last_win_x, self._last_win_y, self._win_width, self._win_height)
@@ -259,28 +285,35 @@ class WindowDragSession:
                     snap_margin_y = max(80, int(mw_height * 0.08))
 
                     is_left_snap = (
-                        self._last_hand_x <= mw_left + snap_margin_x
+                        eff_hand_x <= mw_left + snap_margin_x
+                        or self._last_hand_x <= mw_left + snap_margin_x
                         or (
-                            self._last_win_x <= mw_left + 30
-                            and self._last_hand_x <= mw_left + int(mw_width * 0.35)
+                            self._last_win_x <= mw_left + 40
+                            and eff_hand_x <= mw_left + int(mw_width * 0.45)
                         )
                     )
 
                     is_right_snap = (
-                        self._last_hand_x >= mw_right - snap_margin_x
+                        eff_hand_x >= mw_right - snap_margin_x
+                        or self._last_hand_x >= mw_right - snap_margin_x
                         or (
-                            (self._last_win_x + self._win_width) >= mw_right - 30
-                            and self._last_hand_x >= mw_right - int(mw_width * 0.35)
+                            (self._last_win_x + self._win_width) >= mw_right - 40
+                            and eff_hand_x >= mw_right - int(mw_width * 0.45)
                         )
                     )
 
-                    is_top_hand = self._last_hand_y <= mw_top + snap_margin_y
+                    is_top_hand = (
+                        eff_hand_y <= mw_top + snap_margin_y
+                        or self._last_hand_y <= mw_top + snap_margin_y
+                    )
                     is_top_win = (
-                        self._last_win_y <= mw_top + 30
-                        and self._last_hand_y <= mw_top + int(mw_height * 0.35)
+                        self._last_win_y <= mw_top + 40
+                        and eff_hand_y <= mw_top + int(mw_height * 0.45)
                     )
                     is_in_top = is_top_hand or is_top_win
                     is_center_x = (
+                        (mw_left + snap_margin_x) < eff_hand_x < (mw_right - snap_margin_x)
+                    ) or (
                         (mw_left + snap_margin_x) < self._last_hand_x < (mw_right - snap_margin_x)
                     )
                     is_top_maximize = is_in_top and is_center_x

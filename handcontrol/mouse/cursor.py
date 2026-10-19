@@ -32,12 +32,14 @@ class CursorConfig:
         max_speed_px_per_s: Maximum cursor displacement per second. Prevents jumps.
         smoothing_min_cutoff: One Euro min_cutoff (Hz). Lower = more smoothing.
         smoothing_beta: One Euro beta. Higher = faster response to fast motion.
+        sensitivity: Movement scaling factor (1.0 = standard, <1.0 = dampened/gentle).
     """
 
-    dead_zone_px: float = 4.0
+    dead_zone_px: float = 7.0
     max_speed_px_per_s: float = 3000.0
-    smoothing_min_cutoff: float = 1.0
+    smoothing_min_cutoff: float = 0.15
     smoothing_beta: float = 0.007
+    sensitivity: float = 0.85
 
 
 @dataclass
@@ -178,8 +180,8 @@ class CursorController:
         max_dist = self._config.max_speed_px_per_s * dt
         if dist > max_dist and max_dist > 0:
             scale = max_dist / dist
-            sx = self._last_x + dx * scale
-            sy = self._last_y + dy * scale
+            dx = dx * scale
+            dy = dy * scale
             dist = max_dist
 
         # Dead zone.
@@ -193,13 +195,39 @@ class CursorController:
                 frozen=False,
             )
 
-        self._last_x = sx
-        self._last_y = sy
+        # Smooth dead-zone ramp & sensitivity scaling
+        excess = dist - self._config.dead_zone_px
+        ratio = (excess / dist) * self._config.sensitivity
+        target_x = self._last_x + dx * ratio
+        target_y = self._last_y + dy * ratio
+
+        # Edge assist: snap cleanly to virtual desktop boundary when near outer border
+        sl = float(self._region.screen_left)
+        st = float(self._region.screen_top)
+        sr = sl + float(self._region.screen_width)
+        sb = st + float(self._region.screen_height)
+
+        if target_x <= sl + 4.0:
+            target_x = sl
+        elif target_x >= sr - 4.0:
+            target_x = sr
+
+        if target_y <= st + 4.0:
+            target_y = st
+        elif target_y >= sb - 4.0:
+            target_y = sb
+
+        # Clamp target coordinates strictly to virtual screen rect
+        target_x = max(sl, min(sr, target_x))
+        target_y = max(st, min(sb, target_y))
+
+        self._last_x = target_x
+        self._last_y = target_y
         self._last_timestamp = timestamp
 
         return CursorUpdate(
-            x=sx,
-            y=sy,
+            x=target_x,
+            y=target_y,
             moved=True,
             clutch_active=True,
             frozen=False,
