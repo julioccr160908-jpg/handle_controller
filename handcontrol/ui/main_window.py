@@ -1010,7 +1010,8 @@ class MainWindow(QMainWindow):
                         self._extractor.reset(side)
 
                 lms_by_hand = {
-                    obs.handedness: [(p.x, p.y) for p in obs.landmarks] for obs in hand_frame.hands
+                    obs.handedness: [(p.x, p.y) for p in obs.landmarks_normalized]
+                    for obs in hand_frame.hands
                 }
                 gesture_events = self._gesture_engine.update(
                     features_by_hand,
@@ -1032,8 +1033,8 @@ class MainWindow(QMainWindow):
                     (obs for obs in hand_frame.hands if obs.handedness == pref_hand), None
                 )
 
-                if pref_obs and len(pref_obs.landmarks) > 8:
-                    idx_tip = pref_obs.landmarks[8]
+                if pref_obs and len(pref_obs.landmarks_normalized) > 8:
+                    idx_tip = pref_obs.landmarks_normalized[8]
                     active_g = self._gesture_engine.get_active_gestures()
                     is_pointing = any("point" in g for g in active_g)
                     is_dragging = any("pinch_sustained" in g for g in active_g)
@@ -1073,11 +1074,11 @@ class MainWindow(QMainWindow):
 
                 # Window drag control (left hand fist gesture, Section 8.2)
                 left_obs = next((obs for obs in hand_frame.hands if obs.handedness == "Left"), None)
-                if left_obs and len(left_obs.landmarks) > 0:
+                if left_obs and len(left_obs.landmarks_normalized) > 0:
                     lm = (
-                        left_obs.landmarks[9]
-                        if len(left_obs.landmarks) > 9
-                        else left_obs.landmarks[0]
+                        left_obs.landmarks_normalized[9]
+                        if len(left_obs.landmarks_normalized) > 9
+                        else left_obs.landmarks_normalized[0]
                     )
                     lx, ly = self._region.map_normalized(lm.x, lm.y)
 

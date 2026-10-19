@@ -84,6 +84,8 @@ class TestHandObservation:
         assert obs.handedness_confidence == 0.95
         assert len(obs.landmarks_normalized) == 21
         assert len(obs.landmarks_image) == 21
+        assert len(obs.landmarks) == 21
+        assert obs.landmarks == obs.landmarks_normalized
 
     def test_left_hand(self):
         obs = _make_hand_observation(handedness="Left")

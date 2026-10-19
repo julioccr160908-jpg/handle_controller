@@ -54,6 +54,11 @@ class HandObservation(BaseModel):
     landmarks_image: list[ImagePoint] = Field(min_length=21, max_length=21)
     presence_confidence: float = Field(ge=0.0, le=1.0)
 
+    @property
+    def landmarks(self) -> list[LandmarkPoint]:
+        """Convenience alias for landmarks_normalized."""
+        return self.landmarks_normalized
+
 
 class HandFrame(BaseModel):
     """Complete tracking result for a single video frame.
