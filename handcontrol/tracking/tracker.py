@@ -50,12 +50,14 @@ class HandTracker:
         min_tracking_confidence: float = 0.5,
         model_complexity: int = 0,
         inference_width: int = 480,
+        flip_handedness: bool = False,
     ) -> None:
         if model_complexity not in (0, 1):
             raise ValueError("model_complexity must be 0 (fast) or 1 (full)")
         if inference_width < 160:
             raise ValueError("inference_width must be at least 160 pixels")
         prepare_mediapipe_resources()
+        self._flip_handedness = flip_handedness
         self._mp_hands = mp.solutions.hands
         self._hands = self._mp_hands.Hands(
             static_image_mode=False,
@@ -71,13 +73,23 @@ class HandTracker:
         self._connection_style = self._mp_drawing_styles.get_default_hand_connections_style()
         logger.info(
             "HandTracker initialized: max_hands=%d, complexity=%d, inference_width=%d, "
-            "det_conf=%.2f, track_conf=%.2f",
+            "flip_handedness=%s, det_conf=%.2f, track_conf=%.2f",
             max_hands,
             model_complexity,
             inference_width,
+            flip_handedness,
             min_detection_confidence,
             min_tracking_confidence,
         )
+
+    @property
+    def flip_handedness(self) -> bool:
+        """Whether to invert handedness labels."""
+        return self._flip_handedness
+
+    @flip_handedness.setter
+    def flip_handedness(self, value: bool) -> None:
+        self._flip_handedness = value
 
     def process(
         self,
@@ -129,9 +141,11 @@ class HandTracker:
             ):
                 classification = handedness_info.classification[0]
 
-                # Swap handedness because the image is mirror-flipped (D002).
                 raw_label = classification.label
-                actual_label = "Left" if raw_label == "Right" else "Right"
+                if self._flip_handedness:
+                    actual_label = "Left" if raw_label == "Right" else "Right"
+                else:
+                    actual_label = raw_label
 
                 landmarks_norm = [
                     LandmarkPoint(x=lm.x, y=lm.y, z=lm.z) for lm in hand_landmarks.landmark

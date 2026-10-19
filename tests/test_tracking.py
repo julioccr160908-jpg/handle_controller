@@ -72,3 +72,13 @@ class TestHandTracker:
                 assert isinstance(hand_frame, HandFrame)
         finally:
             tracker.close()
+
+    def test_flip_handedness_property(self):
+        """Verify flip_handedness can be queried and set dynamically."""
+        tracker = HandTracker(flip_handedness=False)
+        try:
+            assert tracker.flip_handedness is False
+            tracker.flip_handedness = True
+            assert tracker.flip_handedness is True
+        finally:
+            tracker.close()

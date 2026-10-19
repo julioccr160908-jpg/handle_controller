@@ -16,6 +16,7 @@ Threading model:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
@@ -175,7 +176,7 @@ class MainWindow(QMainWindow):
             height=cfg.settings.camera_height,
             fps=cfg.settings.camera_fps,
         )
-        self._tracker = HandTracker()
+        self._tracker = HandTracker(flip_handedness=cfg.settings.flip_handedness)
         self._extractor = FeatureExtractor()
         self._gesture_engine = GestureEngine()
         self._mapper = GestureMapper()
@@ -330,6 +331,13 @@ class MainWindow(QMainWindow):
         self._btn_calibrate.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_calibrate.clicked.connect(self._on_calibrate_region)
         top_bar.addWidget(self._btn_calibrate)
+
+        self._btn_invert_hands = QPushButton()
+        self._update_invert_hands_button_text()
+        self._btn_invert_hands.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_invert_hands.setToolTip("Alternar detecção de mão Direita / Esquerda se sua câmera espelhar de forma diferente")
+        self._btn_invert_hands.clicked.connect(self._on_toggle_invert_hands)
+        top_bar.addWidget(self._btn_invert_hands)
 
         # Profile switcher & editor (Phase 7)
         self._profile_combo = QComboBox()
@@ -789,6 +797,47 @@ class MainWindow(QMainWindow):
                 }
             """)
 
+    def _update_invert_hands_button_text(self) -> None:
+        is_inverted = self.config_manager.config.settings.flip_handedness
+        if is_inverted:
+            self._btn_invert_hands.setText("🔄 Mãos: Invertidas")
+            self._btn_invert_hands.setStyleSheet("""
+                QPushButton {
+                    background-color: #5c3c10;
+                    color: #ffd166;
+                    font-weight: bold;
+                    padding: 6px 12px;
+                    border-radius: 6px;
+                    border: 1px solid #f39c12;
+                    font-size: 11px;
+                }
+                QPushButton:hover { background-color: #7d5218; }
+            """)
+        else:
+            self._btn_invert_hands.setText("🖐️ Mãos: Normal")
+            self._btn_invert_hands.setStyleSheet("""
+                QPushButton {
+                    background-color: #2b3a4a;
+                    color: white;
+                    font-weight: bold;
+                    padding: 6px 12px;
+                    border-radius: 6px;
+                    border: 1px solid #4a627a;
+                    font-size: 11px;
+                }
+                QPushButton:hover { background-color: #3b5066; }
+            """)
+
+    @Slot()
+    def _on_toggle_invert_hands(self) -> None:
+        new_val = not self.config_manager.config.settings.flip_handedness
+        self.config_manager.config.settings.flip_handedness = new_val
+        self._tracker.flip_handedness = new_val
+        self._update_invert_hands_button_text()
+        with contextlib.suppress(Exception):
+            self.config_manager.save()
+        logger.info("flip_handedness toggled to %s", new_val)
+
         self._update_video_border()
         self._update_tray()
 
@@ -873,7 +922,9 @@ class MainWindow(QMainWindow):
         self._safety.full_reset()
 
         # Re-create pipeline for next start.
-        self._tracker = HandTracker()
+        self._tracker = HandTracker(
+            flip_handedness=self.config_manager.config.settings.flip_handedness
+        )
         self._extractor = FeatureExtractor()
         self._gesture_engine = GestureEngine(
             preferred_hand=self.config_manager.config.settings.preferred_hand

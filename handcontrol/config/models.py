@@ -31,6 +31,7 @@ class GlobalSettings(BaseModel):
     emergency_hotkey: str = Field(default="Ctrl+Shift+F12")
     minimize_to_tray: bool = Field(default=True)
     autostart: bool = Field(default=False)
+    flip_handedness: bool = Field(default=False)
 
 
 class GestureRuleConfig(BaseModel):
