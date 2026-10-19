@@ -50,6 +50,7 @@ from handcontrol.capture.camera import CaptureThread
 from handcontrol.config.storage import ConfigManager
 from handcontrol.features.extractor import FeatureExtractor
 from handcontrol.gestures.engine import GestureEngine
+from handcontrol.gestures.state_machine import GestureState
 from handcontrol.mapping.profile import GestureMapper
 from handcontrol.metrics.performance import PerformanceMetrics
 from handcontrol.mouse.cursor import CursorController
@@ -191,6 +192,8 @@ class MainWindow(QMainWindow):
         self._metrics = PerformanceMetrics()
         self._confirmed_real_mode_in_session = False
         self._selected_hwnd: int = 0
+        self._drag_hand: str | None = None
+        self._drag_last_seen_time: float = 0.0
         self._is_quitting = False
         self._processing_interval_s = 1.0 / min(cfg.settings.camera_fps, _MAX_PROCESSING_FPS)
 
@@ -946,6 +949,8 @@ class MainWindow(QMainWindow):
             self._controller.swap_executor(self._real_executor)
         self._safety = SafetyManager(self._controller, self._mapper)
         self._metrics.reset()
+        self._drag_hand = None
+        self._drag_last_seen_time = 0.0
 
         # Reset UI.
         self._btn_start.setEnabled(True)
@@ -1121,52 +1126,110 @@ class MainWindow(QMainWindow):
                         )
                 else:
                     self._cursor_controller.on_hand_lost()
-                    if not self._safety.simulation_mode:
-                        self._controller._executor.release_all()
+                    if not self._safety.simulation_mode and hasattr(self._real_executor, "mouse"):
+                        self._real_executor.mouse.release_all()
 
-                # Window drag control (fist gesture on non-preferred hand or whichever hand closes)
-                active_g = self._gesture_engine.get_active_gestures()
-                is_fist_active = any("fist" in g for g in active_g)
+                # Window drag control (fist gesture on either hand)
+                drag_mgr = getattr(self._real_executor.window, "drag", None)
+                is_drag_active = drag_mgr is not None and drag_mgr.is_active
 
-                # Prioritize non-preferred hand for window drag if multiple hands present
-                fist_obs = next(
-                    (obs for obs in hand_frame.hands if obs.handedness != pref_hand),
-                    hand_frame.hands[0] if hand_frame.hands else None,
-                )
+                # Check if window_grab or window_release was requested in this frame
+                grab_req = next((r for r in requests if r.action_name == "window_grab"), None)
+                release_req = next((r for r in requests if r.action_name == "window_release"), None)
 
-                if is_fist_active and fist_obs and len(fist_obs.landmarks_normalized) > 0:
+                # Determine which hand is grabbing or dragging
+                target_obs = None
+                if is_drag_active and self._drag_hand:
+                    # Maintain tracking on the same hand that started the drag
+                    target_obs = next(
+                        (obs for obs in hand_frame.hands if obs.handedness == self._drag_hand),
+                        None,
+                    )
+
+                if target_obs is None and (grab_req is not None or not is_drag_active):
+                    # Identify candidate hand that initiated the fist
+                    req_hand = grab_req.parameters.get("hand") if grab_req else None
+                    if req_hand:
+                        target_obs = next(
+                            (obs for obs in hand_frame.hands if obs.handedness == req_hand),
+                            None,
+                        )
+                    if target_obs is None:
+                        # Find hand with fist gesture in ACTIVE, CANDIDATE or RELEASING state
+                        fist_hands = [
+                            obs
+                            for obs in hand_frame.hands
+                            if any(
+                                sm.state
+                                in (
+                                    GestureState.ACTIVE,
+                                    GestureState.CANDIDATE,
+                                    GestureState.RELEASING,
+                                )
+                                for (gid, h), sm in self._gesture_engine._machines.items()
+                                if gid == "fist" and h == obs.handedness
+                            )
+                        ]
+                        if fist_hands:
+                            # Prefer non-preferred hand if both made fist, else first
+                            target_obs = next(
+                                (obs for obs in fist_hands if obs.handedness != pref_hand),
+                                fist_hands[0],
+                            )
+                        elif hand_frame.hands:
+                            target_obs = next(
+                                (obs for obs in hand_frame.hands if obs.handedness != pref_hand),
+                                hand_frame.hands[0],
+                            )
+
+                if target_obs and len(target_obs.landmarks_normalized) > 0:
+                    self._drag_hand = target_obs.handedness
+                    self._drag_last_seen_time = hand_frame.timestamp
+
                     lm = (
-                        fist_obs.landmarks_normalized[9]
-                        if len(fist_obs.landmarks_normalized) > 9
-                        else fist_obs.landmarks_normalized[0]
+                        target_obs.landmarks_normalized[9]
+                        if len(target_obs.landmarks_normalized) > 9
+                        else target_obs.landmarks_normalized[0]
                     )
                     lx, ly = self._region.map_normalized(lm.x, lm.y)
 
-                    # If window_grab was requested, inject hand coordinates
-                    for req in requests:
-                        if req.action_name == "window_grab" and "x" not in req.parameters:
-                            req.parameters["x"] = lx
-                            req.parameters["y"] = ly
-                            if self._selected_hwnd:
-                                req.parameters["hwnd"] = self._selected_hwnd
+                    # Inject hand screen coordinates into window_grab request
+                    if grab_req is not None and "x" not in grab_req.parameters:
+                        grab_req.parameters["x"] = lx
+                        grab_req.parameters["y"] = ly
+                        if self._selected_hwnd:
+                            grab_req.parameters["hwnd"] = self._selected_hwnd
 
-                    # If drag session is active, update window position
+                    # If drag session is active, update window position smoothly
                     if (
-                        hasattr(self._real_executor, "window")
-                        and self._real_executor.window.drag.is_active
+                        is_drag_active
                         and not self._safety.commands_paused
                         and not self._safety.is_emergency
                     ):
-                        self._real_executor.window.drag.update_hand_position(
-                            lx, ly, timestamp=hand_frame.timestamp
-                        )
+                        drag_mgr.update_hand_position(lx, ly, timestamp=hand_frame.timestamp)
                 else:
-                    # When fist is released or hand is absent, release grabbed window
-                    if (
-                        hasattr(self._real_executor, "window")
-                        and self._real_executor.window.drag.is_active
-                    ):
-                        self._real_executor.window.drag.end_grab()
+                    # Hand was temporarily lost
+                    if is_drag_active:
+                        # Grace period: 0.40 seconds before cancelling the drag session
+                        elapsed_lost = hand_frame.timestamp - self._drag_last_seen_time
+                        if elapsed_lost > 0.40:
+                            drag_mgr.cancel_grab()
+                            self._drag_hand = None
+
+                # Check if state machine for the dragging hand has returned to IDLE or COOLDOWN
+                if is_drag_active and self._drag_hand:
+                    hand_sm = self._gesture_engine._machines.get(("fist", self._drag_hand))
+                    if hand_sm and hand_sm.state in (GestureState.IDLE, GestureState.COOLDOWN):
+                        drag_mgr.end_grab()
+                        self._drag_hand = None
+
+                # If an explicit window_release request was fired, reset dragging hand
+                if release_req is not None:
+                    self._drag_hand = None
+
+                # Also if drag_mgr ended or cancelled, reset drag hand
+                if drag_mgr is not None and not drag_mgr.is_active:
+                    self._drag_hand = None
 
                 t_action_start = time.monotonic()
                 action_results = self._controller.submit_many(requests)

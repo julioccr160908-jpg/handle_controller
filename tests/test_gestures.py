@@ -410,3 +410,35 @@ class TestGestureEngine:
 
         active = engine.get_active_gestures()
         assert any("point" in a for a in active)
+
+    def test_engine_evaluates_any_hand(self):
+        """A gesture with hand='Any' can be triggered by either Left or Right hand."""
+        cfg_any = GestureConfig(
+            gesture_id="fist",
+            hand="Any",
+            min_confirm_time_s=0.04,
+            min_release_time_s=0.04,
+        )
+        engine = GestureEngine(configs=[cfg_any])
+
+        # Test Left hand fist
+        fist_feat = _fist_features()
+        t = 0.0
+        events_left: list = []
+        for _ in range(3):
+            events_left.extend(engine.update({"Left": fist_feat}, t))
+            t += 0.033
+        assert any(e.gesture_id == "fist" and e.hand == "Left" and e.phase == GesturePhase.STARTED for e in events_left)
+
+        # Release Left
+        for _ in range(3):
+            engine.update({"Left": _open_palm_features()}, t)
+            t += 0.033
+
+        # Test Right hand fist
+        events_right: list = []
+        for _ in range(3):
+            events_right.extend(engine.update({"Right": fist_feat}, t))
+            t += 0.033
+        assert any(e.gesture_id == "fist" and e.hand == "Right" and e.phase == GesturePhase.STARTED for e in events_right)
+

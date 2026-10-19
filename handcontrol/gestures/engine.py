@@ -195,6 +195,22 @@ class GestureEngine:
                 sm = self._get_machine(key, cfg, "Both")
                 events.extend(sm.update(matched, timestamp))
 
+            elif cfg.hand == "Any":
+                # Single-hand gesture valid for either hand.
+                for hand_label in ("Left", "Right"):
+                    features = features_by_hand.get(hand_label)
+                    key = (cfg.gesture_id, hand_label)
+                    if features is None:
+                        if key in self._machines:
+                            events.extend(self._machines[key].cancel(timestamp))
+                        continue
+                    matched = self._evaluate_rule(cfg, features)
+                    sm = self._get_machine(key, cfg, hand_label)
+                    payload = self._build_payload(cfg, features)
+                    events.extend(
+                        sm.update(matched, timestamp, features.is_valid and 1.0 or 0.0, payload)
+                    )
+
             else:
                 # Single-hand gesture — only evaluate if the hand is present.
                 features = features_by_hand.get(actual_hand)
@@ -248,6 +264,10 @@ class GestureEngine:
             if cfg.hand == "Both":
                 key = (cfg.gesture_id, "Both")
                 self._machines[key] = GestureStateMachine(cfg, "Both")
+            elif cfg.hand == "Any":
+                for hand in ("Left", "Right"):
+                    key = (cfg.gesture_id, hand)
+                    self._machines[key] = GestureStateMachine(cfg, hand)
             else:
                 for hand in ("Left", "Right"):
                     # Only build for the resolved hand.

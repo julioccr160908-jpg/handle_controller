@@ -11,7 +11,9 @@ Flow:
 
 from __future__ import annotations
 
+import ctypes
 import logging
+import sys
 import time
 
 from handcontrol.windows.manager import WindowManager
@@ -93,6 +95,8 @@ class WindowDragSession:
         # If maximized, restore before dragging so it can move freely
         if info.is_maximized:
             self._wm.restore_window(info.hwnd)
+            if sys.platform == "win32":
+                time.sleep(0.04)
             info = self._wm._inspect_window(info.hwnd) or info
 
         # Calculate relative offset so there is ZERO initial jump
@@ -149,11 +153,20 @@ class WindowDragSession:
             self._last_update_time = now
             return False
 
+        # Ensure window is restored if still zoomed on Windows
+        if (
+            sys.platform == "win32"
+            and ctypes.windll.user32.IsWindow(self._hwnd)
+            and ctypes.windll.user32.IsZoomed(self._hwnd)
+        ):
+            self._wm.restore_window(self._hwnd)
+
         ok = self._wm.set_window_position(self._hwnd, target_x, target_y)
         if ok:
             self._last_win_x = target_x
             self._last_win_y = target_y
             self._last_update_time = now
+            logger.debug("Window %d moved to (%d, %d)", self._hwnd, target_x, target_y)
 
         return ok
 

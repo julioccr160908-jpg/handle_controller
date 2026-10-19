@@ -195,7 +195,7 @@ def create_default_app_config() -> AppConfig:
         GestureRuleConfig(
             gesture_id="two_fingers", name="Dois Dedos", hand="Preferred", rule_type="static"
         ),
-        GestureRuleConfig(gesture_id="fist", name="Punho Fechado", hand="Left", rule_type="static"),
+        GestureRuleConfig(gesture_id="fist", name="Punho Fechado", hand="Any", rule_type="static"),
         GestureRuleConfig(
             gesture_id="two_open_palms",
             name="Duas Palmas",

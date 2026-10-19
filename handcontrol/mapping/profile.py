@@ -262,6 +262,7 @@ class GestureMapper:
 
         # Build request.
         params = dict(rule.parameters)
+        params.setdefault("hand", event.hand)
         if rule.action_name == "scroll" and "delta_y" not in params:
             vy = event.payload.get("vy", 0.0)
             if abs(vy) > 0.03:
