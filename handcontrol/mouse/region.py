@@ -62,13 +62,29 @@ class ActiveRegion:
         """Return (left_frac, top_frac, right_frac, bottom_frac)."""
         return (self.left_frac, self.top_frac, self.right_frac, self.bottom_frac)
 
-    def set_margins(self, margin_frac: float) -> None:
-        """Set symmetric margin fraction (clamped to [0.0, 0.45])."""
-        m = max(0.0, min(0.45, margin_frac))
-        self.left_frac = m
-        self.top_frac = m
-        self.right_frac = 1.0 - m
-        self.bottom_frac = 1.0 - m
+    def set_margins(
+        self,
+        margin_or_left: float,
+        top: float | None = None,
+        right: float | None = None,
+        bottom: float | None = None,
+    ) -> None:
+        """Set margin fractions (symmetric if only 1 arg given, or per-edge if 4 args given)."""
+        if top is None or right is None or bottom is None:
+            m = max(0.0, min(0.45, margin_or_left))
+            self.left_frac = m
+            self.top_frac = m
+            self.right_frac = 1.0 - m
+            self.bottom_frac = 1.0 - m
+        else:
+            lm = max(0.0, min(0.45, margin_or_left))
+            tm = max(0.0, min(0.45, top))
+            rm = max(0.0, min(0.45, right))
+            bm = max(0.0, min(0.45, bottom))
+            self.left_frac = lm
+            self.top_frac = tm
+            self.right_frac = 1.0 - rm
+            self.bottom_frac = 1.0 - bm
 
     def set_bounds(
         self,
