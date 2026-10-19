@@ -129,6 +129,14 @@ class OneEuro2D:
         self._fx = OneEuroFilter(min_cutoff, beta, d_cutoff)
         self._fy = OneEuroFilter(min_cutoff, beta, d_cutoff)
 
+    @property
+    def filter_x(self) -> OneEuroFilter:
+        return self._fx
+
+    @property
+    def filter_y(self) -> OneEuroFilter:
+        return self._fy
+
     def filter(self, x: float, y: float, timestamp: float) -> tuple[float, float]:
         """Filter a 2D position.
 
@@ -146,3 +154,4 @@ class OneEuro2D:
         """Reset both axes (call when hand reappears after loss)."""
         self._fx.reset()
         self._fy.reset()
+

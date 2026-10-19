@@ -112,6 +112,10 @@ class CursorController:
     def clutch_active(self) -> bool:
         return self._clutch_active
 
+    @property
+    def smoother(self) -> OneEuro2D:
+        return self._smoother
+
     def update(
         self,
         norm_x: float,
