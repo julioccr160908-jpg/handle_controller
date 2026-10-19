@@ -1,13 +1,17 @@
-"""Main application window — Phase 2 (Section 9 subset).
+"""Main application window — Phase 3 (Section 9 subset).
 
 Displays live webcam video with MediaPipe hand landmarks, handedness labels,
-FPS, latency, tracking status, and recognized gesture.
+FPS, latency, recognized gesture, last action result, and event history.
+Provides Start/Pause/Stop controls, an Emergency Stop button, and a
+Simulation mode indicator.
 
 Threading model:
     - CaptureThread (Python thread): reads webcam → size-1 buffer.
-    - Processing thread (Python thread): MediaPipe → features → gestures → stores result.
-    - GUI thread (Qt main thread): QTimer at ≤ 30 Hz polls for latest result and
-      updates widgets.  No widget is ever touched outside the GUI thread (Rule 6).
+    - Processing thread (Python thread): MediaPipe → features → gestures
+      → mapping → controller → stores result.
+    - GUI thread (Qt main thread): QTimer at ≤ 30 Hz polls for latest result
+      and updates widgets.  No widget is ever touched outside the GUI thread
+      (Rule 6).
 """
 
 from __future__ import annotations
@@ -24,24 +28,31 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QMainWindow,
     QPushButton,
     QSizePolicy,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
+from handcontrol.actions.controller import ActionController
 from handcontrol.capture.camera import CaptureThread
 from handcontrol.features.extractor import FeatureExtractor
 from handcontrol.gestures.engine import GestureEngine
+from handcontrol.mapping.profile import GestureMapper
 from handcontrol.metrics.performance import PerformanceMetrics
-from handcontrol.tracking.models import GestureEvent, HandFrame
+from handcontrol.safety.manager import SafetyManager
+from handcontrol.tracking.models import ActionResult, ActionStatus, GestureEvent, HandFrame
 from handcontrol.tracking.tracker import HandTracker
 
 logger = logging.getLogger(__name__)
 
 # Maximum display refresh rate (Hz) — spec: ≤ 30 updates/s.
 _MAX_DISPLAY_FPS = 30
+# Max rows shown in the event history list.
+_HISTORY_MAX_ROWS = 60
 
 
 class MainWindow(QMainWindow):
@@ -49,24 +60,29 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("HandControl — Phase 1")
-        self.setMinimumSize(860, 660)
+        self.setWindowTitle("HandControl — Simulação")
+        self.setMinimumSize(960, 700)
 
         # --- pipeline components ---
         self._capture = CaptureThread()
         self._tracker = HandTracker()
         self._extractor = FeatureExtractor()
         self._gesture_engine = GestureEngine()
+        self._mapper = GestureMapper()
+        self._controller = ActionController()  # SimulatedExecutor by default
+        self._safety = SafetyManager(self._controller, self._mapper)
         self._metrics = PerformanceMetrics()
 
         # --- processing thread state ---
         self._processing = False
         self._processing_thread: threading.Thread | None = None
-        # Result now includes gesture events.
-        self._latest_result: tuple[HandFrame, np.ndarray, list[GestureEvent]] | None = None
+        self._latest_result: (
+            tuple[HandFrame, np.ndarray, list[GestureEvent], list[ActionResult]] | None
+        ) = None
         self._result_lock = threading.Lock()
         self._paused = False
-        # Last gesture name shown in UI (updated in display thread only).
+
+        # --- UI display state (GUI thread only) ---
         self._last_gesture: str = "—"
 
         # --- build UI ---
@@ -84,7 +100,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         root = QVBoxLayout(central)
-        root.setSpacing(10)
+        root.setSpacing(8)
         root.setContentsMargins(12, 12, 12, 12)
 
         # --- Style constants ---
@@ -96,6 +112,9 @@ class MainWindow(QMainWindow):
         accent_hover = "#1a508b"
         accent_pressed = "#0a2647"
         border_color = "#233554"
+        color_emergency = "#c0392b"
+        color_emergency_hover = "#e74c3c"
+        color_sim = "#1a6b3a"
 
         self.setStyleSheet(f"""
             QMainWindow {{
@@ -105,9 +124,38 @@ class MainWindow(QMainWindow):
                 background-color: {bg_dark};
                 color: {fg_text};
             }}
+            QSplitter::handle {{
+                background-color: {border_color};
+                width: 4px;
+            }}
         """)
 
-        # --- Video display ---
+        # ── Status / simulation badge ─────────────────────────────────────
+        sim_badge = QLabel("🔒  MODO SIMULAÇÃO — Nenhuma ação real será executada")
+        sim_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sim_badge.setStyleSheet(f"""
+            QLabel {{
+                background-color: {color_sim};
+                color: white;
+                font-size: 12px;
+                font-weight: bold;
+                padding: 6px 12px;
+                border-radius: 6px;
+                border: 1px solid #2ecc71;
+            }}
+        """)
+        root.addWidget(sim_badge)
+
+        # ── Main content: video + history side by side ────────────────────
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(4)
+
+        # Video panel.
+        video_widget = QWidget()
+        video_layout = QVBoxLayout(video_widget)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        video_layout.setSpacing(0)
+
         self._video_label = QLabel("📷  Camera not started")
         self._video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._video_label.setStyleSheet(f"""
@@ -120,11 +168,57 @@ class MainWindow(QMainWindow):
                 padding: 20px;
             }}
         """)
-        self._video_label.setMinimumSize(640, 480)
+        self._video_label.setMinimumSize(600, 440)
         self._video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        root.addWidget(self._video_label, stretch=1)
+        video_layout.addWidget(self._video_label, stretch=1)
 
-        # --- Metrics bar ---
+        splitter.addWidget(video_widget)
+
+        # History panel.
+        history_widget = QWidget()
+        history_layout = QVBoxLayout(history_widget)
+        history_layout.setContentsMargins(8, 0, 0, 0)
+        history_layout.setSpacing(4)
+
+        history_title = QLabel("📋  Histórico de Ações")
+        history_title.setStyleSheet(f"""
+            QLabel {{
+                color: {fg_text};
+                font-size: 13px;
+                font-weight: bold;
+                background: transparent;
+                padding: 4px 0;
+            }}
+        """)
+        history_layout.addWidget(history_title)
+
+        self._history_list = QListWidget()
+        self._history_list.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {bg_panel};
+                color: {fg_text};
+                border: 1px solid {border_color};
+                border-radius: 6px;
+                font-size: 11px;
+                font-family: 'Consolas', 'Courier New', monospace;
+            }}
+            QListWidget::item {{
+                padding: 3px 6px;
+                border-bottom: 1px solid {bg_accent};
+            }}
+            QListWidget::item:selected {{
+                background-color: {accent_blue};
+            }}
+        """)
+        self._history_list.setMinimumWidth(240)
+        history_layout.addWidget(self._history_list, stretch=1)
+
+        splitter.addWidget(history_widget)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+        root.addWidget(splitter, stretch=1)
+
+        # ── Metrics bar ───────────────────────────────────────────────────
         metrics_frame = QFrame()
         metrics_frame.setStyleSheet(f"""
             QFrame {{
@@ -140,7 +234,7 @@ class MainWindow(QMainWindow):
         label_style = f"""
             QLabel {{
                 color: {fg_text};
-                font-size: 13px;
+                font-size: 12px;
                 font-weight: bold;
                 background: transparent;
             }}
@@ -150,6 +244,7 @@ class MainWindow(QMainWindow):
         self._latency_label = QLabel("Latência: — ms")
         self._hands_label = QLabel("Mãos: —")
         self._gesture_label = QLabel("Gesto: —")
+        self._action_label = QLabel("Ação: —")
         self._tracking_label = QLabel("⏹  Parado")
 
         for lbl in (
@@ -157,6 +252,7 @@ class MainWindow(QMainWindow):
             self._latency_label,
             self._hands_label,
             self._gesture_label,
+            self._action_label,
             self._tracking_label,
         ):
             lbl.setStyleSheet(label_style)
@@ -165,12 +261,12 @@ class MainWindow(QMainWindow):
         metrics_layout.addStretch()
         root.addWidget(metrics_frame)
 
-        # --- Control buttons ---
+        # ── Control buttons ───────────────────────────────────────────────
         btn_frame = QFrame()
         btn_frame.setStyleSheet("QFrame { background: transparent; }")
         btn_layout = QHBoxLayout(btn_frame)
         btn_layout.setContentsMargins(0, 4, 0, 4)
-        btn_layout.setSpacing(12)
+        btn_layout.setSpacing(10)
 
         btn_style = f"""
             QPushButton {{
@@ -178,8 +274,8 @@ class MainWindow(QMainWindow):
                 color: white;
                 border: none;
                 border-radius: 8px;
-                padding: 12px 28px;
-                font-size: 14px;
+                padding: 10px 24px;
+                font-size: 13px;
                 font-weight: bold;
             }}
             QPushButton:hover {{
@@ -194,12 +290,36 @@ class MainWindow(QMainWindow):
             }}
         """
 
+        emerg_style = f"""
+            QPushButton {{
+                background-color: {color_emergency};
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 24px;
+                font-size: 13px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {color_emergency_hover};
+            }}
+            QPushButton:pressed {{
+                background-color: #922b21;
+            }}
+            QPushButton:disabled {{
+                background-color: #2a2a3a;
+                color: #555;
+            }}
+        """
+
         self._btn_start = QPushButton("▶  Iniciar")
         self._btn_pause = QPushButton("⏸  Pausar")
         self._btn_stop = QPushButton("⏹  Parar")
+        self._btn_emergency = QPushButton("🛑  Parada de Emergência")
 
         self._btn_pause.setEnabled(False)
         self._btn_stop.setEnabled(False)
+        self._btn_emergency.setEnabled(False)
 
         for btn in (self._btn_start, self._btn_pause, self._btn_stop):
             btn.setStyleSheet(btn_style)
@@ -207,9 +327,16 @@ class MainWindow(QMainWindow):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_layout.addWidget(btn)
 
+        self._btn_emergency.setStyleSheet(emerg_style)
+        self._btn_emergency.setMinimumHeight(44)
+        self._btn_emergency.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self._btn_emergency)
+
         self._btn_start.clicked.connect(self._on_start)
         self._btn_pause.clicked.connect(self._on_pause)
         self._btn_stop.clicked.connect(self._on_stop)
+        self._btn_emergency.clicked.connect(self._on_emergency)
 
         root.addWidget(btn_frame)
 
@@ -253,6 +380,7 @@ class MainWindow(QMainWindow):
         self._btn_start.setEnabled(False)
         self._btn_pause.setEnabled(True)
         self._btn_stop.setEnabled(True)
+        self._btn_emergency.setEnabled(True)
         self._tracking_label.setText("🟢  Rastreando")
         logger.info("Tracking started")
 
@@ -263,6 +391,9 @@ class MainWindow(QMainWindow):
         if self._paused:
             self._tracking_label.setText("⏸  Pausado")
             self._btn_pause.setText("▶  Retomar")
+            # Cancel active gestures and release inputs.
+            self._gesture_engine.cancel_all(time.monotonic())
+            self._controller._executor.release_all()
             logger.info("Tracking paused")
         else:
             self._tracking_label.setText("🟢  Rastreando")
@@ -282,16 +413,22 @@ class MainWindow(QMainWindow):
 
         self._capture.stop()
         self._tracker.close()
-        # Re-create tracker, extractor and engine for next start.
+        self._safety.full_reset()
+
+        # Re-create pipeline for next start.
         self._tracker = HandTracker()
         self._extractor = FeatureExtractor()
         self._gesture_engine = GestureEngine()
+        self._mapper = GestureMapper()
+        self._controller = ActionController()
+        self._safety = SafetyManager(self._controller, self._mapper)
         self._metrics.reset()
 
         # Reset UI.
         self._btn_start.setEnabled(True)
         self._btn_pause.setEnabled(False)
         self._btn_stop.setEnabled(False)
+        self._btn_emergency.setEnabled(False)
         self._btn_pause.setText("⏸  Pausar")
         self._paused = False
         self._last_gesture = "—"
@@ -302,22 +439,37 @@ class MainWindow(QMainWindow):
         self._latency_label.setText("Latência: — ms")
         self._hands_label.setText("Mãos: —")
         self._gesture_label.setText("Gesto: —")
+        self._action_label.setText("Ação: —")
         self._tracking_label.setText("⏹  Parado")
         logger.info("Tracking stopped")
+
+    @Slot()
+    def _on_emergency(self) -> None:
+        """Activate emergency stop: block all actions and release inputs."""
+        if self._safety.is_emergency:
+            # Second press clears the emergency.
+            self._safety.reset_emergency()
+            self._btn_emergency.setText("🛑  Parada de Emergência")
+            self._btn_emergency.setStyleSheet(self._btn_emergency.styleSheet())
+            self._tracking_label.setText("🟢  Rastreando" if not self._paused else "⏸  Pausado")
+            logger.info("Emergency cleared by user")
+        else:
+            self._safety.emergency_stop()
+            self._btn_emergency.setText("✅  Retomar (limpar emergência)")
+            self._tracking_label.setText("🔴  EMERGÊNCIA")
+            logger.warning("Emergency stop activated by user")
 
     # --------------------------------------------------- processing thread --
 
     def _processing_loop(self) -> None:
-        """Tracking loop — runs in a dedicated thread.
+        """Full pipeline loop — runs in a dedicated thread.
 
-        Grabs the latest capture frame, runs MediaPipe, and stores the result
-        for the GUI thread to pick up via ``_update_display``.
+        Capture → MediaPipe → features → gestures → mapping → controller.
         """
         logger.info("Processing loop started")
         last_frame_id = -1
 
         while self._processing:
-            # Check for camera errors.
             if self._capture.error and not self._capture.is_running:
                 time.sleep(0.05)
                 continue
@@ -331,7 +483,6 @@ class MainWindow(QMainWindow):
                 time.sleep(0.005)
                 continue
 
-            # Skip if we already processed this exact frame.
             if capture_frame.frame_id == last_frame_id:
                 time.sleep(0.001)
                 continue
@@ -339,18 +490,18 @@ class MainWindow(QMainWindow):
             last_frame_id = capture_frame.frame_id
 
             try:
+                # Phase 1: tracking.
                 hand_frame, annotated = self._tracker.process(
                     capture_frame.image,
                     capture_frame.frame_id,
                     capture_frame.timestamp,
                 )
 
-                # Phase 2: extract features and evaluate gestures.
+                # Phase 2: features + gestures.
                 features_by_hand = self._extractor.extract_all(
                     hand_frame.hands,
                     hand_frame.timestamp,
                 )
-                # Reset extractor state for hands that have been lost.
                 present = {obs.handedness for obs in hand_frame.hands}
                 for side in ("Left", "Right"):
                     if side not in present:
@@ -361,15 +512,31 @@ class MainWindow(QMainWindow):
                     hand_frame.timestamp,
                 )
 
+                # Phase 3: mapping + execution.
+                requests = self._mapper.process_events(gesture_events)
+                action_results = self._controller.submit_many(requests)
+
+                # Reset repeat counters for ended/cancelled gestures.
+                from handcontrol.tracking.models import GesturePhase
+
+                for ev in gesture_events:
+                    if ev.phase in (GesturePhase.ENDED, GesturePhase.CANCELLED):
+                        self._mapper.reset_gesture(ev.gesture_id, ev.hand)
+
                 latency_ms = (time.monotonic() - capture_frame.timestamp) * 1000
                 self._metrics.record_frame()
                 self._metrics.record_latency(latency_ms)
 
                 with self._result_lock:
-                    self._latest_result = (hand_frame, annotated, gesture_events)
+                    self._latest_result = (
+                        hand_frame,
+                        annotated,
+                        gesture_events,
+                        action_results,
+                    )
 
             except Exception:
-                logger.exception("Tracking error")
+                logger.exception("Pipeline error")
                 time.sleep(0.01)
 
         logger.info("Processing loop ended")
@@ -378,10 +545,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _update_display(self) -> None:
-        """Refresh the GUI with the latest tracking result.
-
-        Runs on the Qt main thread at ≤ 30 Hz.
-        """
+        """Refresh the GUI with the latest pipeline result (≤ 30 Hz)."""
         # Camera error feedback.
         if self._capture.error and not self._capture.is_running:
             self._video_label.setText(
@@ -399,17 +563,27 @@ class MainWindow(QMainWindow):
         if result is None:
             return
 
-        hand_frame, annotated, gesture_events = result
+        hand_frame, annotated, gesture_events, action_results = result
 
-        # Update gesture label from events.
+        # Update gesture label.
+        from handcontrol.tracking.models import GesturePhase
+
         for ev in gesture_events:
-            from handcontrol.tracking.models import GesturePhase
-
             if ev.phase == GesturePhase.STARTED:
                 self._last_gesture = ev.gesture_id
             elif ev.phase in (GesturePhase.ENDED, GesturePhase.CANCELLED):
                 self._last_gesture = "—"
         self._gesture_label.setText(f"Gesto: {self._last_gesture}")
+
+        # Update action label + history.
+        if action_results:
+            last = action_results[-1]
+            icon = {"SIMULATED": "🟡", "EXECUTED": "🟢", "REFUSED": "🔴", "FAILED": "❌"}.get(
+                last.status.value, "•"
+            )
+            self._action_label.setText(f"Ação: {icon} {last.action_name}")
+            for ar in action_results:
+                self._add_history_entry(ar)
 
         # Convert BGR → RGB → QPixmap.
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
@@ -431,7 +605,6 @@ class MainWindow(QMainWindow):
         self._fps_label.setText(f"FPS: {fps:.1f}")
         self._latency_label.setText(f"Latência: {latency:.0f} ms")
 
-        # Update hand info.
         if not hand_frame.hands:
             self._hands_label.setText("Mãos: nenhuma")
         else:
@@ -440,9 +613,25 @@ class MainWindow(QMainWindow):
             ]
             self._hands_label.setText(f"Mãos: {', '.join(parts)}")
 
+    def _add_history_entry(self, result: ActionResult) -> None:
+        """Add one line to the history list widget (GUI thread only)."""
+        icon = {
+            ActionStatus.SIMULATED: "🟡",
+            ActionStatus.EXECUTED: "🟢",
+            ActionStatus.REFUSED: "🔴",
+            ActionStatus.FAILED: "❌",
+        }.get(result.status, "•")
+        label = f"{icon} {result.action_name}"
+        if result.reason:
+            label += f"  — {result.reason[:40]}"
+        self._history_list.insertItem(0, label)
+        # Keep list bounded.
+        while self._history_list.count() > _HISTORY_MAX_ROWS:
+            self._history_list.takeItem(self._history_list.count() - 1)
+
     # ------------------------------------------------------------ cleanup ---
 
-    def closeEvent(self, event) -> None:  # noqa: N802 — Qt naming convention
+    def closeEvent(self, event) -> None:  # noqa: N802
         """Ensure clean shutdown when the window is closed."""
         self._on_stop()
         event.accept()

@@ -1,1 +1,5 @@
-"""Safety, simulation mode, and emergency stop module (Phase 3)."""
+"""Safety module (Phase 3)."""
+
+from handcontrol.safety.manager import SafetyManager
+
+__all__ = ["SafetyManager"]
