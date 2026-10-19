@@ -73,6 +73,10 @@ class WindowDragSession:
             info = self._wm.get_window_under_cursor(hand_x, hand_y)
         if not info:
             info = self._wm.get_foreground_window()
+        if not info:
+            eligible = self._wm.list_eligible_windows()
+            if eligible:
+                info = eligible[0]
 
         if not info:
             return False, "Nenhuma janela elegível encontrada para mover.", None

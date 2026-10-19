@@ -53,8 +53,8 @@ def rule_point(features: HandFeatures) -> bool:
 
 
 def rule_fist(features: HandFeatures) -> bool:
-    """Fist: all five fingers folded."""
-    return _fingers_match(features, [F, F, F, F, F])
+    """Fist: all four fingers folded (thumb don't care, as it naturally folds over fingers)."""
+    return _fingers_match(features, [_, F, F, F, F])
 
 
 def rule_open_palm(features: HandFeatures) -> bool:

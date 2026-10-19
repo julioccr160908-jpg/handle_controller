@@ -132,11 +132,20 @@ def create_default_app_config() -> AppConfig:
         MappingRuleConfig(
             gesture_id="fist",
             action_name="window_grab",
-            hand="Left",
+            hand="Any",
             priority=5,
             cooldown_s=0.10,
             repeat_limit=1,
             trigger_phase="STARTED",
+        ),
+        MappingRuleConfig(
+            gesture_id="fist",
+            action_name="window_release",
+            hand="Any",
+            priority=5,
+            cooldown_s=0.0,
+            repeat_limit=1,
+            trigger_phase="ENDED",
         ),
         MappingRuleConfig(
             gesture_id="two_open_palms",

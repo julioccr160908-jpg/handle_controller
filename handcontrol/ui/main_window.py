@@ -426,6 +426,7 @@ class MainWindow(QMainWindow):
         """)
         self._btn_refresh_windows.clicked.connect(self._refresh_window_list)
         win_bar.addWidget(self._btn_refresh_windows)
+        self._refresh_window_list()
 
         # Quick window actions
         for icon_text, action_id, tip in [
@@ -1123,13 +1124,21 @@ class MainWindow(QMainWindow):
                     if not self._safety.simulation_mode:
                         self._controller._executor.release_all()
 
-                # Window drag control (left hand fist gesture, Section 8.2)
-                left_obs = next((obs for obs in hand_frame.hands if obs.handedness == "Left"), None)
-                if left_obs and len(left_obs.landmarks_normalized) > 0:
+                # Window drag control (fist gesture on non-preferred hand or whichever hand closes)
+                active_g = self._gesture_engine.get_active_gestures()
+                is_fist_active = any("fist" in g for g in active_g)
+
+                # Prioritize non-preferred hand for window drag if multiple hands present
+                fist_obs = next(
+                    (obs for obs in hand_frame.hands if obs.handedness != pref_hand),
+                    hand_frame.hands[0] if hand_frame.hands else None,
+                )
+
+                if is_fist_active and fist_obs and len(fist_obs.landmarks_normalized) > 0:
                     lm = (
-                        left_obs.landmarks_normalized[9]
-                        if len(left_obs.landmarks_normalized) > 9
-                        else left_obs.landmarks_normalized[0]
+                        fist_obs.landmarks_normalized[9]
+                        if len(fist_obs.landmarks_normalized) > 9
+                        else fist_obs.landmarks_normalized[0]
                     )
                     lx, ly = self._region.map_normalized(lm.x, lm.y)
 
@@ -1152,11 +1161,12 @@ class MainWindow(QMainWindow):
                             lx, ly, timestamp=hand_frame.timestamp
                         )
                 else:
+                    # When fist is released or hand is absent, release grabbed window
                     if (
                         hasattr(self._real_executor, "window")
                         and self._real_executor.window.drag.is_active
                     ):
-                        self._real_executor.window.drag.cancel_grab()
+                        self._real_executor.window.drag.end_grab()
 
                 t_action_start = time.monotonic()
                 action_results = self._controller.submit_many(requests)

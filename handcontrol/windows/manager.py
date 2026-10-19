@@ -69,7 +69,10 @@ class WindowManager:
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return None
-        return self._inspect_window(hwnd)
+        info = self._inspect_window(hwnd)
+        if info and self._is_eligible(info):
+            return info
+        return None
 
     def get_window_under_cursor(self, x: float, y: float) -> WindowInfo | None:
         """Return information about the top-level window under the virtual point (x, y)."""
@@ -84,7 +87,10 @@ class WindowManager:
 
         # Resolve to top-level window
         root_hwnd = user32.GetAncestor(hwnd, GA_ROOT) or hwnd
-        return self._inspect_window(root_hwnd)
+        info = self._inspect_window(root_hwnd)
+        if info and self._is_eligible(info):
+            return info
+        return None
 
     def list_eligible_windows(self) -> list[WindowInfo]:
         """List all top-level application windows eligible for gesture control."""
@@ -284,6 +290,8 @@ class WindowManager:
         if not info.title or not info.title.strip():
             return False
         if info.rect[2] <= 10 or info.rect[3] <= 10:
+            return False
+        if sys.platform == "win32" and ctypes.windll.user32.IsWindow(info.hwnd) and not ctypes.windll.user32.IsWindowVisible(info.hwnd):
             return False
         # Ignore Windows shell internals
         return info.class_name not in (
