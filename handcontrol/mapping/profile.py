@@ -298,3 +298,37 @@ class GestureMapper:
         """Reset all internal state (call on stop / emergency)."""
         self._last_fired.clear()
         self._repeat_count.clear()
+
+    def load_profile_rules(self, rules: list[MappingRule]) -> None:
+        """Replace active mapping rules with a new set."""
+        self._rules = list(rules)
+        self.reset_all()
+
+    def load_from_profile_model(self, profile: object) -> None:
+        """Load and convert rules from a ProfileModel."""
+        from handcontrol.config.models import ProfileModel
+
+        if not isinstance(profile, ProfileModel):
+            return
+
+        converted: list[MappingRule] = []
+        for m in profile.mappings:
+            phase = (
+                GesturePhase(m.trigger_phase)
+                if m.trigger_phase in GesturePhase._value2member_map_
+                else GesturePhase.STARTED
+            )
+            converted.append(
+                MappingRule(
+                    gesture_id=m.gesture_id,
+                    action_name=m.action_name,
+                    hand=m.hand,
+                    priority=m.priority,
+                    cooldown_s=m.cooldown_s,
+                    repeat_limit=m.repeat_limit,
+                    enabled=m.enabled,
+                    parameters=m.parameters,
+                    trigger_phase=phase,
+                )
+            )
+        self.load_profile_rules(converted)

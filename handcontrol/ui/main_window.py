@@ -22,7 +22,7 @@ import time
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -46,6 +46,7 @@ from handcontrol.actions.controller import ActionController
 from handcontrol.actions.keyboard_executor import KeyboardExecutor
 from handcontrol.actions.mouse_executor import MouseExecutor, _virtual_screen
 from handcontrol.capture.camera import CaptureThread
+from handcontrol.config.storage import ConfigManager
 from handcontrol.features.extractor import FeatureExtractor
 from handcontrol.gestures.engine import GestureEngine
 from handcontrol.mapping.profile import GestureMapper
@@ -63,6 +64,8 @@ from handcontrol.tracking.models import (
     HandFrame,
 )
 from handcontrol.tracking.tracker import HandTracker
+from handcontrol.ui.profile_editor import ProfileEditorDialog
+from handcontrol.ui.tray import SystemTrayController
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +177,35 @@ class MainWindow(QMainWindow):
         self._metrics = PerformanceMetrics()
         self._confirmed_real_mode_in_session = False
         self._selected_hwnd: int = 0
+        self._is_quitting = False
+
+        # --- configuration & profiles (Phase 7) ---
+        self.config_manager = ConfigManager()
+        cfg = self.config_manager.config
+        self._gesture_engine.preferred_hand = cfg.settings.preferred_hand
+        self._cursor_controller.config.dead_zone_px = cfg.settings.dead_zone_px
+        self._cursor_controller.smoother.filter_x.min_cutoff = cfg.settings.smoothing_min_cutoff
+        self._cursor_controller.smoother.filter_x.beta = cfg.settings.smoothing_beta
+        self._cursor_controller.smoother.filter_y.min_cutoff = cfg.settings.smoothing_min_cutoff
+        self._cursor_controller.smoother.filter_y.beta = cfg.settings.smoothing_beta
+        self._region.set_margins(*cfg.settings.active_region_margins)
+
+        active_p = next(
+            (p for p in cfg.profiles if p.profile_id == cfg.active_profile_id),
+            cfg.profiles[0] if cfg.profiles else None,
+        )
+        if active_p:
+            self._mapper.load_from_profile_model(active_p)
+
+        # --- system tray (Phase 7) ---
+        self._tray = SystemTrayController(
+            parent_widget=self,
+            on_restore=self._restore_from_tray,
+            on_quit=self._quit_application,
+        )
+        self._tray.pause_toggled.connect(self._on_tray_pause_toggled)
+        self._tray.real_mode_toggled.connect(self._on_tray_real_mode_toggled)
+        self._tray.show()
 
         # --- processing thread state ---
         self._processing = False
@@ -287,6 +319,48 @@ class MainWindow(QMainWindow):
         self._btn_calibrate.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_calibrate.clicked.connect(self._on_calibrate_region)
         top_bar.addWidget(self._btn_calibrate)
+
+        # Profile switcher & editor (Phase 7)
+        self._profile_combo = QComboBox()
+        self._profile_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #1a1a2e;
+                color: #e0e0e0;
+                border: 1px solid #233554;
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 11px;
+                min-width: 130px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1a1a2e;
+                color: #e0e0e0;
+                selection-background-color: #0f3460;
+            }
+        """)
+        self._refresh_profile_combo()
+        self._profile_combo.currentIndexChanged.connect(self._on_profile_combo_changed)
+        top_bar.addWidget(self._profile_combo)
+
+        self._btn_editor = QPushButton("⚙️ Perfis")
+        self._btn_editor.setToolTip("Abrir Editor Visual de Perfis e Gestos")
+        self._btn_editor.setStyleSheet("""
+            QPushButton {
+                background-color: #2c3e50;
+                color: white;
+                font-weight: bold;
+                padding: 6px 12px;
+                border-radius: 6px;
+                border: 1px solid #34495e;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #34495e;
+            }
+        """)
+        self._btn_editor.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_editor.clicked.connect(self._open_profile_editor)
+        top_bar.addWidget(self._btn_editor)
 
         root.addLayout(top_bar)
 
@@ -703,6 +777,7 @@ class MainWindow(QMainWindow):
             """)
 
         self._update_video_border()
+        self._update_tray()
 
     @Slot()
     def _on_start(self) -> None:
@@ -712,6 +787,7 @@ class MainWindow(QMainWindow):
             self._tracking_label.setText("🟢  Rastreando")
             self._btn_pause.setText("⏸  Pausar")
             self._update_video_border()
+            self._update_tray()
             logger.info("Tracking resumed")
             return
 
@@ -746,6 +822,7 @@ class MainWindow(QMainWindow):
         self._btn_emergency.setEnabled(True)
         self._tracking_label.setText("🟢  Rastreando")
         self._update_video_border()
+        self._update_tray()
         logger.info("Tracking started")
 
     @Slot()
@@ -764,6 +841,7 @@ class MainWindow(QMainWindow):
             self._btn_pause.setText("⏸  Pausar")
             logger.info("Tracking resumed")
         self._update_video_border()
+        self._update_tray()
 
     @Slot()
     def _on_stop(self) -> None:
@@ -810,6 +888,7 @@ class MainWindow(QMainWindow):
         self._action_label.setText("Ação: —")
         self._tracking_label.setText("⏹  Parado")
         self._update_video_border()
+        self._update_tray()
         logger.info("Tracking stopped")
 
     @Slot()
@@ -892,9 +971,13 @@ class MainWindow(QMainWindow):
                     if side not in present:
                         self._extractor.reset(side)
 
+                lms_by_hand = {
+                    obs.handedness: [(p.x, p.y) for p in obs.landmarks] for obs in hand_frame.hands
+                }
                 gesture_events = self._gesture_engine.update(
                     features_by_hand,
                     hand_frame.timestamp,
+                    landmarks_by_hand=lms_by_hand,
                 )
 
                 # Phase 3 & 4: mapping + cursor control.
@@ -1098,10 +1181,123 @@ class MainWindow(QMainWindow):
         while self._history_list.count() > _HISTORY_MAX_ROWS:
             self._history_list.takeItem(self._history_list.count() - 1)
 
-    # ------------------------------------------------------------ cleanup ---
+    # ------------------------------------------------------------ Phase 7 ---
+
+    def _refresh_profile_combo(self) -> None:
+        """Repopulate the profile selection combobox."""
+        if not hasattr(self, "_profile_combo"):
+            return
+        self._profile_combo.blockSignals(True)
+        self._profile_combo.clear()
+        cfg = self.config_manager.config
+        for p in cfg.profiles:
+            self._profile_combo.addItem(f"📋 {p.name}", userData=p.profile_id)
+        # Select active
+        for i in range(self._profile_combo.count()):
+            if self._profile_combo.itemData(i) == cfg.active_profile_id:
+                self._profile_combo.setCurrentIndex(i)
+                break
+        self._profile_combo.blockSignals(False)
+
+    def _on_profile_combo_changed(self, index: int) -> None:
+        """Handle user changing active profile from top bar combobox."""
+        if index < 0 or not hasattr(self, "_profile_combo"):
+            return
+        profile_id = self._profile_combo.itemData(index)
+        if not profile_id:
+            return
+        cfg = self.config_manager.config
+        cfg.active_profile_id = str(profile_id)
+        self.config_manager.save(cfg)
+        active_p = next((p for p in cfg.profiles if p.profile_id == profile_id), None)
+        if active_p:
+            self._mapper.load_from_profile_model(active_p)
+            logger.info("Active profile changed to '%s'", active_p.name)
+
+    def _open_profile_editor(self) -> None:
+        """Open the visual profile, gesture and settings editor."""
+        dialog = ProfileEditorDialog(self.config_manager, self, on_apply=self._on_config_applied)
+        dialog.exec()
+
+    def _on_config_applied(self) -> None:
+        """Callback when settings or profiles are saved in editor."""
+        cfg = self.config_manager.config
+        self._cursor_controller.config.dead_zone_px = cfg.settings.dead_zone_px
+        self._cursor_controller.smoother.filter_x.min_cutoff = cfg.settings.smoothing_min_cutoff
+        self._cursor_controller.smoother.filter_x.beta = cfg.settings.smoothing_beta
+        self._cursor_controller.smoother.filter_y.min_cutoff = cfg.settings.smoothing_min_cutoff
+        self._cursor_controller.smoother.filter_y.beta = cfg.settings.smoothing_beta
+        self._gesture_engine.preferred_hand = cfg.settings.preferred_hand
+        self._region.set_margins(*cfg.settings.active_region_margins)
+
+        self._refresh_profile_combo()
+        active_p = next((p for p in cfg.profiles if p.profile_id == cfg.active_profile_id), None)
+        if active_p:
+            self._mapper.load_from_profile_model(active_p)
+
+    def _update_tray(self) -> None:
+        """Update system tray privacy indicator and state."""
+        if hasattr(self, "_tray"):
+            is_capturing = self._processing
+            is_paused = self._paused
+            is_real = not self._safety.simulation_mode
+            self._tray.update_state(
+                is_capturing=is_capturing,
+                is_paused=is_paused,
+                is_real_mode=is_real,
+            )
+
+    def _restore_from_tray(self) -> None:
+        """Restore and raise the main application window."""
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def _quit_application(self) -> None:
+        """Cleanly terminate the application from system tray menu."""
+        self._is_quitting = True
+        self.close()
+
+    def _on_tray_pause_toggled(self, paused: bool) -> None:
+        if paused != self._paused:
+            self._on_pause()
+
+    def _on_tray_real_mode_toggled(self, real_mode: bool) -> None:
+        if real_mode != (not self._safety.simulation_mode):
+            self._on_toggle_real_mode()
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802
+        if (
+            event.type() == QEvent.Type.WindowStateChange
+            and self.isMinimized()
+            and hasattr(self, "config_manager")
+            and self.config_manager.config.settings.minimize_to_tray
+        ):
+            self.hide()
+        super().changeEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        """Ensure clean shutdown when the window is closed."""
+        """Ensure clean shutdown or minimize to tray when closed."""
+        if hasattr(self, "_is_quitting") and self._is_quitting:
+            self._hotkey.stop()
+            self._on_stop()
+            if hasattr(self, "_tray"):
+                self._tray.hide()
+            event.accept()
+            return
+
+        if hasattr(self, "config_manager") and self.config_manager.config.settings.minimize_to_tray:
+            event.ignore()
+            self.hide()
+            if hasattr(self, "_tray"):
+                self._tray.show_message(
+                    "HandControl",
+                    "O aplicativo continua ativo na bandeja do sistema.",
+                )
+            return
+
         self._hotkey.stop()
         self._on_stop()
+        if hasattr(self, "_tray"):
+            self._tray.hide()
         event.accept()

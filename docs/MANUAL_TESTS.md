@@ -149,4 +149,66 @@ Antes de iniciar qualquer teste com **Modo Real** ativado:
   - Tente agarrá-la ou movê-la via HandControl rodando como usuário comum.
   - *Resultado esperado:* A ação é recusada com aviso descritivo no histórico de ações (`Janela pertence a um processo elevado (Administrador)...`), prevenindo bloqueios silenciosos de UIPI.
 
+---
+
+### 14. Editor de Perfis, Gestos Dinâmicos e Bandeja do Sistema (Fase 7)
+
+- [ ] **Passo 14.1 (Gerenciamento e Criação de Perfis):**
+  - Na barra superior da janela principal, clique em **"⚙️ Editar Perfis"**.
+  - No diálogo do Editor de Perfis, clique em **"➕ Novo Perfil"**, insira o nome `Apresentacao` e confirme.
+  - Clique em **"📋 Duplicar"** para clonar o perfil e em **"🗑️ Excluir"** para remover o clone.
+  - Verifique que o perfil `Apresentacao` agora aparece no combobox de perfis ativos na barra superior da janela principal.
+
+- [ ] **Passo 14.2 (Exportação e Importação Segura de JSON):**
+  - Selecione o perfil `Apresentacao` e clique em **"📤 Exportar Perfil"**. Salve o arquivo `apresentacao.json`.
+  - Abra o arquivo exportado em um editor de texto e verifique a formatação JSON legível e estruturada.
+  - No HandControl, clique em **"📥 Importar Perfil"** e selecione o arquivo salvo.
+  - Verifique que o perfil é importado com sucesso (renomeado automaticamente se houver conflito de nome).
+
+- [ ] **Passo 14.3 (Rejeição Graciosa de JSON Malformado ou Inválido):**
+  - Crie um arquivo de texto com JSON truncado ou faltando chaves obrigatórias.
+  - Clique em **"📥 Importar Perfil"** e tente carregar este arquivo inválido.
+  - *Resultado esperado:* O aplicativo exibe uma mensagem de erro clara (**"JSON inválido ou corrompido"** / **"Estrutura incompatível com ProfileModel"**), sem travar nem corromper a configuração existente.
+
+- [ ] **Passo 14.4 (Gestos Dinâmicos: Deslize e Círculo):**
+  - No Editor de Perfis, clique em **"➕ Adicionar Regra"**.
+  - Configure o gatilho como `swipe_left`, ação `key_press`, parâmetro `left` (para retroceder slide).
+  - Adicione outra regra com gatilho `swipe_right`, ação `key_press`, parâmetro `right` (para avançar slide).
+  - Adicione uma regra com gatilho `circle_cw`, ação `system_command`, parâmetro `volume_up`.
+  - Clique em **"Salvar e Fechar"** e inicie o rastreamento (Modo Real ou Simulação).
+  - Realize um movimento rápido e retilíneo com a mão para a esquerda / direita e círculos no sentido horário.
+  - *Resultado esperado:* O histórico de ações registra a detecção do deslize/círculo correspondente e dispara o comando configurado sem exigir qualquer alteração no código Python.
+
+- [ ] **Passo 14.5 (Gravação e Reconhecimento de Trajetória Personalizada via DTW):**
+  - No Editor de Perfis, ao editar ou adicionar uma regra, selecione o gatilho `custom_trajectory`.
+  - Clique em **"🔴 Gravar Trajetória"** e desenhe um padrão no ar (ex: uma letra "V" ou "Z") diante da câmera dentro do tempo limite.
+  - Verifique que a trajetória capturada é reamostrada e exibida no visualizador do editor.
+  - Salve a regra e teste reproduzir o gesto diante da câmera.
+  - *Resultado esperado:* O algoritmo DTW (Dynamic Time Warping) reconhece a trajetória personalizada com invariância a variações moderadas de velocidade e escala.
+
+- [ ] **Passo 14.6 (Detecção e Alerta de Conflitos de Regras):**
+  - No Editor de Perfis, configure duas regras com o mesmo gesto (ex: `fist`) apontando para ações distintas com a mesma prioridade.
+  - *Resultado esperado:* O banner de validação no topo do editor exibe um aviso em vermelho (**"⚠️ 1 conflito direto detectado: [fist] mapeado para múltiplas ações com a mesma prioridade"**).
+  - Ajuste a prioridade de uma das regras ou altere o gesto: o banner retorna para o estado verde (**"✅ Nenhuma colisão ou conflito detectado neste perfil."**).
+
+- [ ] **Passo 14.7 (Minimização para a Bandeja do Sistema / System Tray):**
+  - Clique no botão de minimizar da janela principal (`_`) ou feche a janela (`X`).
+  - *Resultado esperado:* A janela é ocultada da barra de tarefas e o ícone do HandControl permanece visível na área de notificação do Windows (System Tray).
+  - Dê um duplo clique no ícone da bandeja (ou clique com o botão direito e selecione **"Abrir HandControl"**).
+  - *Resultado esperado:* A janela principal é restaurada imediatamente no centro da tela.
+
+- [ ] **Passo 14.8 (Indicador Dinâmico de Privacidade no Tray):**
+  - Com a câmera parada, o ícone da bandeja exibe badge cinza (**X**) e tooltip indicando *"HandControl — Parado"*.
+  - Ao iniciar em modo de simulação, o ícone exibe badge verde (**S**) e tooltip *"HandControl — Simulação Ativa"*.
+  - Ao ativar o modo real, o ícone exibe badge âmbar/laranja (**R**) e tooltip *"HandControl — MODO REAL ATIVO (Câmera monitorando)"*.
+  - Ao pausar, o ícone exibe badge amarelo (**P**) e tooltip *"HandControl — Pausado"*.
+
+- [ ] **Passo 14.9 (Persistência Atômica e Recuperação de Configuração Corrompida):**
+  - Altere opções no editor de perfis e feche o aplicativo.
+  - Verifique a criação de `%APPDATA%\HandControl\config.json` e `%APPDATA%\HandControl\config.bak`.
+  - Simule corrupção apagando o conteúdo de `config.json` deixando-o com bytes inválidos.
+  - Abra o aplicativo novamente.
+  - *Resultado esperado:* O aplicativo detecta o arquivo corrompido, recupera automaticamente a partir do backup `.bak` (ou restaura a configuração padrão segura se ambos falharem) e continua a inicialização sem travar.
+
+
 

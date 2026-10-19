@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 
 from handcontrol.gestures.config import GestureConfig
+from handcontrol.gestures.dynamic import DynamicGestureRecognizer
 from handcontrol.gestures.rules import (
     rule_fist,
     rule_pinch_index,
@@ -141,6 +142,7 @@ class GestureEngine:
         self._configs: list[GestureConfig] = configs if configs is not None else _default_configs()
         # One state machine per (gesture_id, hand) pair.
         self._machines: dict[tuple[str, str], GestureStateMachine] = {}
+        self.dynamic_recognizer = DynamicGestureRecognizer()
         self._build_machines()
 
     # ---------------------------------------------------------------- public
@@ -157,6 +159,7 @@ class GestureEngine:
         self,
         features_by_hand: dict[str, HandFeatures],
         timestamp: float,
+        landmarks_by_hand: dict[str, list[tuple[float, float]]] | None = None,
     ) -> list[GestureEvent]:
         """Process one frame and return all emitted gesture events.
 
@@ -164,6 +167,7 @@ class GestureEngine:
             features_by_hand: Dict mapping "Left"/"Right" → HandFeatures.
                               Pass an empty dict when no hands are detected.
             timestamp: Current monotonic timestamp.
+            landmarks_by_hand: Optional raw normalized coordinates for dynamic gestures.
 
         Returns:
             List of ``GestureEvent`` objects (may be empty).
@@ -208,6 +212,13 @@ class GestureEngine:
                 events.extend(
                     sm.update(matched, timestamp, features.is_valid and 1.0 or 0.0, payload)
                 )
+
+        # Dynamic gestures evaluation
+        if landmarks_by_hand:
+            dyn_events = self.dynamic_recognizer.update(
+                features_by_hand, landmarks_by_hand, timestamp
+            )
+            events.extend(dyn_events)
 
         return events
 
@@ -309,4 +320,5 @@ class GestureEngine:
         events: list[GestureEvent] = []
         for sm in self._machines.values():
             events.extend(sm.cancel(timestamp))
+        self.dynamic_recognizer.reset()
         return events
