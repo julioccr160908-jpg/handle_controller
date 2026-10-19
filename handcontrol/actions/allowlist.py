@@ -73,6 +73,66 @@ _ALL_ACTIONS: list[ActionSpec] = [
         description="Move the cursor in virtual screen or normalized coordinates.",
         optional_params=frozenset({"norm_x", "norm_y", "x", "y"}),
     ),
+    # --- Keyboard shortcuts (Section 7) ---
+    ActionSpec(
+        name="shortcut",
+        description="Execute a validated keyboard shortcut combination.",
+        required_params=frozenset({"keys"}),
+    ),
+    ActionSpec(
+        name="key_press",
+        description="Press a single validated key.",
+        required_params=frozenset({"key"}),
+    ),
+    ActionSpec(
+        name="shortcut_alt_tab",
+        description="Switch application (Alt+Tab).",
+    ),
+    ActionSpec(
+        name="shortcut_ctrl_c",
+        description="Copy to clipboard (Ctrl+C).",
+    ),
+    ActionSpec(
+        name="shortcut_ctrl_v",
+        description="Paste from clipboard (Ctrl+V).",
+    ),
+    ActionSpec(
+        name="shortcut_ctrl_z",
+        description="Undo last action (Ctrl+Z).",
+    ),
+    ActionSpec(
+        name="shortcut_win_d",
+        description="Toggle show desktop (Win+D).",
+    ),
+    ActionSpec(
+        name="key_esc",
+        description="Escape key (Esc).",
+    ),
+    # --- Multimedia actions (Section 7) ---
+    ActionSpec(
+        name="media_play_pause",
+        description="Play or pause media playback.",
+    ),
+    ActionSpec(
+        name="media_next",
+        description="Skip to next media track.",
+    ),
+    ActionSpec(
+        name="media_prev",
+        description="Return to previous media track.",
+    ),
+    ActionSpec(
+        name="volume_up",
+        description="Increase system audio volume.",
+    ),
+    ActionSpec(
+        name="volume_down",
+        description="Decrease system audio volume.",
+    ),
+    ActionSpec(
+        name="volume_mute",
+        description="Toggle mute system audio volume.",
+    ),
     # --- Window management ---
     ActionSpec(
         name="window_grab",
@@ -148,5 +208,19 @@ class Allowlist:
         for key in parameters:
             if all_known and key not in all_known:
                 errors.append(f"Unknown parameter '{key}' for action '{action_name}'.")
+
+        # Specific shortcut and key validation (Section 7)
+        if action_name == "shortcut" and "keys" in parameters:
+            from handcontrol.actions.keyboard_validator import validate_shortcut
+
+            is_valid, err, _ = validate_shortcut(str(parameters["keys"]))
+            if not is_valid:
+                errors.append(err)
+        elif action_name == "key_press" and "key" in parameters:
+            from handcontrol.actions.keyboard_validator import validate_shortcut
+
+            is_valid, err, _ = validate_shortcut(str(parameters["key"]))
+            if not is_valid:
+                errors.append(err)
 
         return errors

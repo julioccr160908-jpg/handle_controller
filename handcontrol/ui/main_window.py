@@ -40,7 +40,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from handcontrol.actions.composite_executor import CompositeExecutor
 from handcontrol.actions.controller import ActionController
+from handcontrol.actions.keyboard_executor import KeyboardExecutor
 from handcontrol.actions.mouse_executor import MouseExecutor, _virtual_screen
 from handcontrol.capture.camera import CaptureThread
 from handcontrol.features.extractor import FeatureExtractor
@@ -161,7 +163,12 @@ class MainWindow(QMainWindow):
         self._gesture_engine = GestureEngine()
         self._mapper = GestureMapper()
         self._controller = ActionController()  # SimulatedExecutor by default
-        self._real_executor = MouseExecutor()
+        self._mouse_executor = MouseExecutor()
+        self._keyboard_executor = KeyboardExecutor()
+        self._real_executor = CompositeExecutor(
+            mouse_executor=self._mouse_executor,
+            keyboard_executor=self._keyboard_executor,
+        )
         self._safety = SafetyManager(self._controller, self._mapper)
         self._metrics = PerformanceMetrics()
         self._confirmed_real_mode_in_session = False
@@ -933,6 +940,8 @@ class MainWindow(QMainWindow):
         label = f"{icon} {result.action_name}"
         if result.reason:
             label += f"  — {result.reason[:40]}"
+        elif result.action_name.startswith(("media_", "volume_")):
+            label += "  (requer suporte do app em foco)"
         self._history_list.insertItem(0, label)
         while self._history_list.count() > _HISTORY_MAX_ROWS:
             self._history_list.takeItem(self._history_list.count() - 1)

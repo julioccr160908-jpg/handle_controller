@@ -105,3 +105,22 @@ Antes de iniciar qualquer teste com **Modo Real** ativado:
 ### 10. Botão de Emergência da Interface
 - [ ] **Passo 10.1:** Durante a operação normal, clique diretamente no botão vermelho **"🛑 Parada de Emergência"**.
   - *Resultado esperado:* Bloqueio imediato de todas as ações e borda do vídeo vermelha.
+
+---
+
+### 11. Atalhos de Teclado e Teclas de Mídia (Fase 5)
+- [ ] **Passo 11.1 (Atalhos Permitidos):** Teste os atalhos da allowlist (`Alt+Tab`, `Ctrl+C`, `Ctrl+V`, `Ctrl+Z`, `Win+D`, `Esc`).
+  - *Resultado esperado:* Cada atalho executa a ação correspondente no Windows.
+- [ ] **Passo 11.2 (Teclas de Mídia):** Teste os comandos multimídia (`media_play_pause`, `media_next`, `media_prev`, `volume_up`, `volume_down`, `volume_mute`).
+  - *Resultado esperado:* O volume do Windows altera ou o player em foco responde. O histórico da interface exibe o aviso explicativo: `(requer suporte do app em foco)`.
+- [ ] **Passo 11.3 (Bloqueio de Atalhos Perigosos):** Tente submeter atalhos proibidos (ex: `Ctrl+Alt+Del`, `Win+L`, `Alt+F4`).
+  - *Resultado esperado:* O validador rejeita imediatamente a ação como `REFUSED: Dangerous shortcut is blocked by security policy`.
+
+---
+
+### 12. Liberação de Teclas e Prevenção de Teclas Presas (Fase 5)
+- [ ] **Passo 12.1:** Execute uma ação de atalho com modificador (ex: `Alt+Tab` ou `Ctrl+C`).
+- [ ] **Passo 12.2:** Verifique se as teclas modificadoras (`Ctrl`, `Alt`, `Shift`, `Win`) foram liberadas no Windows e não ficaram presas pressionadas.
+- [ ] **Passo 12.3:** Retire a mão da câmera ou pause o aplicativo no meio de uma ação.
+  - *Resultado esperado:* `release_all()` é executado e todas as teclas são liberadas imediatamente.
+
