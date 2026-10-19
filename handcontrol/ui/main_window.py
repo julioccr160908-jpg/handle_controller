@@ -1,11 +1,11 @@
-"""Main application window — Phase 1 (Section 9 subset).
+"""Main application window — Phase 2 (Section 9 subset).
 
 Displays live webcam video with MediaPipe hand landmarks, handedness labels,
-FPS, latency, and tracking status.  Provides Start/Pause/Stop controls.
+FPS, latency, tracking status, and recognized gesture.
 
-Threading model (Phase 1):
+Threading model:
     - CaptureThread (Python thread): reads webcam → size-1 buffer.
-    - Processing thread (Python thread): grabs latest frame → MediaPipe → stores result.
+    - Processing thread (Python thread): MediaPipe → features → gestures → stores result.
     - GUI thread (Qt main thread): QTimer at ≤ 30 Hz polls for latest result and
       updates widgets.  No widget is ever touched outside the GUI thread (Rule 6).
 """
@@ -32,8 +32,10 @@ from PySide6.QtWidgets import (
 )
 
 from handcontrol.capture.camera import CaptureThread
+from handcontrol.features.extractor import FeatureExtractor
+from handcontrol.gestures.engine import GestureEngine
 from handcontrol.metrics.performance import PerformanceMetrics
-from handcontrol.tracking.models import HandFrame
+from handcontrol.tracking.models import GestureEvent, HandFrame
 from handcontrol.tracking.tracker import HandTracker
 
 logger = logging.getLogger(__name__)
@@ -53,14 +55,19 @@ class MainWindow(QMainWindow):
         # --- pipeline components ---
         self._capture = CaptureThread()
         self._tracker = HandTracker()
+        self._extractor = FeatureExtractor()
+        self._gesture_engine = GestureEngine()
         self._metrics = PerformanceMetrics()
 
         # --- processing thread state ---
         self._processing = False
         self._processing_thread: threading.Thread | None = None
-        self._latest_result: tuple[HandFrame, np.ndarray] | None = None
+        # Result now includes gesture events.
+        self._latest_result: tuple[HandFrame, np.ndarray, list[GestureEvent]] | None = None
         self._result_lock = threading.Lock()
         self._paused = False
+        # Last gesture name shown in UI (updated in display thread only).
+        self._last_gesture: str = "—"
 
         # --- build UI ---
         self._setup_ui()
@@ -142,12 +149,14 @@ class MainWindow(QMainWindow):
         self._fps_label = QLabel("FPS: —")
         self._latency_label = QLabel("Latência: — ms")
         self._hands_label = QLabel("Mãos: —")
+        self._gesture_label = QLabel("Gesto: —")
         self._tracking_label = QLabel("⏹  Parado")
 
         for lbl in (
             self._fps_label,
             self._latency_label,
             self._hands_label,
+            self._gesture_label,
             self._tracking_label,
         ):
             lbl.setStyleSheet(label_style)
@@ -273,8 +282,10 @@ class MainWindow(QMainWindow):
 
         self._capture.stop()
         self._tracker.close()
-        # Re-create tracker for next start.
+        # Re-create tracker, extractor and engine for next start.
         self._tracker = HandTracker()
+        self._extractor = FeatureExtractor()
+        self._gesture_engine = GestureEngine()
         self._metrics.reset()
 
         # Reset UI.
@@ -283,12 +294,14 @@ class MainWindow(QMainWindow):
         self._btn_stop.setEnabled(False)
         self._btn_pause.setText("⏸  Pausar")
         self._paused = False
+        self._last_gesture = "—"
 
         self._video_label.setPixmap(QPixmap())
         self._video_label.setText("📷  Câmera parada")
         self._fps_label.setText("FPS: —")
         self._latency_label.setText("Latência: — ms")
         self._hands_label.setText("Mãos: —")
+        self._gesture_label.setText("Gesto: —")
         self._tracking_label.setText("⏹  Parado")
         logger.info("Tracking stopped")
 
@@ -332,12 +345,28 @@ class MainWindow(QMainWindow):
                     capture_frame.timestamp,
                 )
 
+                # Phase 2: extract features and evaluate gestures.
+                features_by_hand = self._extractor.extract_all(
+                    hand_frame.hands,
+                    hand_frame.timestamp,
+                )
+                # Reset extractor state for hands that have been lost.
+                present = {obs.handedness for obs in hand_frame.hands}
+                for side in ("Left", "Right"):
+                    if side not in present:
+                        self._extractor.reset(side)
+
+                gesture_events = self._gesture_engine.update(
+                    features_by_hand,
+                    hand_frame.timestamp,
+                )
+
                 latency_ms = (time.monotonic() - capture_frame.timestamp) * 1000
                 self._metrics.record_frame()
                 self._metrics.record_latency(latency_ms)
 
                 with self._result_lock:
-                    self._latest_result = (hand_frame, annotated)
+                    self._latest_result = (hand_frame, annotated, gesture_events)
 
             except Exception:
                 logger.exception("Tracking error")
@@ -370,7 +399,17 @@ class MainWindow(QMainWindow):
         if result is None:
             return
 
-        hand_frame, annotated = result
+        hand_frame, annotated, gesture_events = result
+
+        # Update gesture label from events.
+        for ev in gesture_events:
+            from handcontrol.tracking.models import GesturePhase
+
+            if ev.phase == GesturePhase.STARTED:
+                self._last_gesture = ev.gesture_id
+            elif ev.phase in (GesturePhase.ENDED, GesturePhase.CANCELLED):
+                self._last_gesture = "—"
+        self._gesture_label.setText(f"Gesto: {self._last_gesture}")
 
         # Convert BGR → RGB → QPixmap.
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
