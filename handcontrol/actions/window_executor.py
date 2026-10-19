@@ -34,7 +34,7 @@ class WindowExecutor(BaseExecutor):
     ) -> None:
         self.wm = window_manager or WindowManager()
         self.desktop = virtual_desktop or enumerate_monitors()
-        self.drag = WindowDragSession(window_manager=self.wm)
+        self.drag = WindowDragSession(window_manager=self.wm, virtual_desktop=self.desktop)
 
     def execute(self, request: ActionRequest) -> ActionResult:
         """Execute a window management action."""
@@ -64,11 +64,17 @@ class WindowExecutor(BaseExecutor):
                 )
 
             if name == "window_release":
-                self.drag.end_grab()
+                hand_x = params.get("x")
+                hand_y = params.get("y")
+                snap_action = self.drag.end_grab(
+                    float(hand_x) if hand_x is not None else None,
+                    float(hand_y) if hand_y is not None else None,
+                )
+                reason = f"Window released ({snap_action})" if snap_action else "Window released"
                 return ActionResult(
                     action_name=name,
                     status=ActionStatus.EXECUTED,
-                    reason="Window released",
+                    reason=reason,
                     timestamp=now,
                 )
 

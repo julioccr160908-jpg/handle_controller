@@ -508,6 +508,149 @@ class TestWindowDragSession:
         assert not session.is_active
         assert session.grabbed_window is None
 
+    def test_edge_snap_left_half(self):
+        w = WindowInfo(hwnd=10, title="Editor", rect=(200, 200, 800, 600))
+        wm = MockWindowManager([w])
+        m = MonitorInfo(
+            index=0,
+            hmonitor=1,
+            rect=(0, 0, 1920, 1080),
+            work_area=(0, 0, 1920, 1040),
+            is_primary=True,
+        )
+        desktop = VirtualDesktop([m])
+        session = WindowDragSession(window_manager=wm, virtual_desktop=desktop)
+
+        session.start_grab(hand_x=500.0, hand_y=500.0, target_hwnd=10, timestamp=1.0)
+        session.update_hand_position(hand_x=50.0, hand_y=500.0, timestamp=1.03)
+
+        action = session.end_grab()
+        assert action == "snap_left"
+        assert not session.is_active
+        # Window rect is left half of work area (0, 0, 960, 1040)
+        snapped = wm._inspect_window(10)
+        assert snapped.rect == (0, 0, 960, 1040)
+
+    def test_edge_snap_right_half(self):
+        w = WindowInfo(hwnd=10, title="Editor", rect=(200, 200, 800, 600))
+        wm = MockWindowManager([w])
+        m = MonitorInfo(
+            index=0,
+            hmonitor=1,
+            rect=(0, 0, 1920, 1080),
+            work_area=(0, 0, 1920, 1040),
+            is_primary=True,
+        )
+        desktop = VirtualDesktop([m])
+        session = WindowDragSession(window_manager=wm, virtual_desktop=desktop)
+
+        session.start_grab(hand_x=500.0, hand_y=500.0, target_hwnd=10, timestamp=1.0)
+        session.update_hand_position(hand_x=1880.0, hand_y=500.0, timestamp=1.03)
+
+        action = session.end_grab()
+        assert action == "snap_right"
+        assert not session.is_active
+        # Window rect is right half of work area (960, 0, 960, 1040)
+        snapped = wm._inspect_window(10)
+        assert snapped.rect == (960, 0, 960, 1040)
+
+    def test_edge_snap_top_maximize(self):
+        w = WindowInfo(hwnd=10, title="Editor", rect=(200, 200, 800, 600))
+        wm = MockWindowManager([w])
+        m = MonitorInfo(
+            index=0,
+            hmonitor=1,
+            rect=(0, 0, 1920, 1080),
+            work_area=(0, 0, 1920, 1040),
+            is_primary=True,
+        )
+        desktop = VirtualDesktop([m])
+        session = WindowDragSession(window_manager=wm, virtual_desktop=desktop)
+
+        session.start_grab(hand_x=500.0, hand_y=500.0, target_hwnd=10, timestamp=1.0)
+        session.update_hand_position(hand_x=960.0, hand_y=30.0, timestamp=1.03)
+
+        action = session.end_grab()
+        assert action == "maximized"
+        assert not session.is_active
+        assert (10, "maximized") in wm.state_changes
+        assert wm._inspect_window(10).state == WindowState.MAXIMIZED
+
+    def test_edge_snap_coordinates_passed_to_end_grab(self):
+        w = WindowInfo(hwnd=10, title="Editor", rect=(200, 200, 800, 600))
+        wm = MockWindowManager([w])
+        m = MonitorInfo(
+            index=0,
+            hmonitor=1,
+            rect=(0, 0, 1920, 1080),
+            work_area=(0, 0, 1920, 1040),
+            is_primary=True,
+        )
+        desktop = VirtualDesktop([m])
+        session = WindowDragSession(window_manager=wm, virtual_desktop=desktop)
+
+        session.start_grab(hand_x=500.0, hand_y=500.0, target_hwnd=10, timestamp=1.0)
+        session.update_hand_position(hand_x=520.0, hand_y=520.0, timestamp=1.03)
+
+        # Release with hand at left edge coordinates
+        action = session.end_grab(hand_x=40.0, hand_y=500.0)
+        assert action == "snap_left"
+        snapped = wm._inspect_window(10)
+        assert snapped.rect == (0, 0, 960, 1040)
+
+    def test_no_snap_when_released_in_center(self):
+        w = WindowInfo(hwnd=10, title="Editor", rect=(200, 200, 800, 600))
+        wm = MockWindowManager([w])
+        m = MonitorInfo(
+            index=0,
+            hmonitor=1,
+            rect=(0, 0, 1920, 1080),
+            work_area=(0, 0, 1920, 1040),
+            is_primary=True,
+        )
+        desktop = VirtualDesktop([m])
+        session = WindowDragSession(window_manager=wm, virtual_desktop=desktop)
+
+        session.start_grab(hand_x=500.0, hand_y=500.0, target_hwnd=10, timestamp=1.0)
+        session.update_hand_position(hand_x=600.0, hand_y=600.0, timestamp=1.03)
+
+        action = session.end_grab()
+        assert action is None
+        assert not session.is_active
+        # Window moved to (300, 300) without resizing
+        snapped = wm._inspect_window(10)
+        assert snapped.rect == (300, 300, 800, 600)
+
+    def test_multi_monitor_edge_snap(self):
+        w = WindowInfo(hwnd=10, title="Editor", rect=(200, 200, 800, 600))
+        wm = MockWindowManager([w])
+        m1 = MonitorInfo(
+            index=0,
+            hmonitor=1,
+            rect=(0, 0, 1920, 1080),
+            work_area=(0, 0, 1920, 1040),
+            is_primary=True,
+        )
+        m2 = MonitorInfo(
+            index=1,
+            hmonitor=2,
+            rect=(1920, 0, 3840, 1080),
+            work_area=(1920, 0, 3840, 1080),
+            is_primary=False,
+        )
+        desktop = VirtualDesktop([m1, m2])
+        session = WindowDragSession(window_manager=wm, virtual_desktop=desktop)
+
+        # Drag hand into left edge of Monitor 2
+        session.start_grab(hand_x=2200.0, hand_y=500.0, target_hwnd=10, timestamp=1.0)
+        session.update_hand_position(hand_x=1950.0, hand_y=500.0, timestamp=1.03)
+
+        action = session.end_grab()
+        assert action == "snap_left"
+        # Left half of monitor 2: left=1920, top=0, width=960, height=1080
+        snapped = wm._inspect_window(10)
+        assert snapped.rect == (1920, 0, 960, 1080)
+
 
 # ---------------------------------------------------------------------------
 # 4. WindowExecutor Tests

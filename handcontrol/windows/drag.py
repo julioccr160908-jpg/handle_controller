@@ -1,12 +1,17 @@
-"""Window dragging session with relative offset and 60 Hz coalescence (Section 8.2).
+"""Window dragging session with relative offset, 60 Hz coalescence, and edge snapping (Section 8.2).
 
 Flow:
 1. Select window (foreground or under cursor).
 2. Grab gesture: record initial window rect and initial hand position.
 3. Compute relative offset (win_pos - hand_pos) so there is ZERO initial jump.
 4. Move window along with hand displacement, coalesced at ≤ 60 Hz.
-5. Release / cancel on hand loss or pause: leaves window at current position.
-6. Guard: detects elevated processes and refuses grab with a descriptive warning.
+5. Release gesture (hand open / fist release):
+   - Left edge: snap window to left half of screen.
+   - Right edge: snap window to right half of screen.
+   - Top center: maximize window to full screen.
+   - Other areas: leave window at current drop position.
+6. Hand loss / cancellation: leaves window at current position without edge snap.
+7. Guard: detects elevated processes and refuses grab with a descriptive warning.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ import time
 
 from handcontrol.windows.manager import WindowManager
 from handcontrol.windows.models import WindowInfo
+from handcontrol.windows.monitors import VirtualDesktop, enumerate_monitors
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +33,28 @@ _MIN_DRAG_INTERVAL = 1.0 / _MAX_DRAG_HZ
 
 
 class WindowDragSession:
-    """Manages an active relative window dragging interaction."""
+    """Manages an active relative window dragging interaction with edge snapping."""
 
-    def __init__(self, window_manager: WindowManager | None = None) -> None:
+    def __init__(
+        self,
+        window_manager: WindowManager | None = None,
+        virtual_desktop: VirtualDesktop | None = None,
+    ) -> None:
         self._wm = window_manager or WindowManager()
+        self._desktop = virtual_desktop or enumerate_monitors()
         self._active = False
         self._hwnd: int = 0
         self._offset_x: float = 0.0
         self._offset_y: float = 0.0
+        self._initial_hand_x: float = 0.0
+        self._initial_hand_y: float = 0.0
+        self._last_hand_x: float = 0.0
+        self._last_hand_y: float = 0.0
         self._last_win_x: int = 0
         self._last_win_y: int = 0
+        self._win_width: int = 800
+        self._win_height: int = 600
+        self._has_moved: bool = False
         self._last_update_time: float = 0.0
         self._target_info: WindowInfo | None = None
 
@@ -63,6 +81,7 @@ class WindowDragSession:
             hand_x: Current screen X coordinate of the grabbing hand.
             hand_y: Current screen Y coordinate of the grabbing hand.
             target_hwnd: Optional explicit window handle to grab.
+            timestamp: Monotonic timestamp of grab start.
 
         Returns:
             (success, message, WindowInfo | None).
@@ -104,8 +123,15 @@ class WindowDragSession:
         self._target_info = info
         self._offset_x = float(info.x) - hand_x
         self._offset_y = float(info.y) - hand_y
+        self._initial_hand_x = hand_x
+        self._initial_hand_y = hand_y
+        self._last_hand_x = hand_x
+        self._last_hand_y = hand_y
         self._last_win_x = info.x
         self._last_win_y = info.y
+        self._win_width = info.rect[2] if len(info.rect) > 2 and info.rect[2] > 0 else 800
+        self._win_height = info.rect[3] if len(info.rect) > 3 and info.rect[3] > 0 else 600
+        self._has_moved = False
         self._last_update_time = timestamp if timestamp is not None else time.monotonic()
         self._active = True
 
@@ -119,6 +145,11 @@ class WindowDragSession:
             self._offset_y,
         )
         return True, "", info
+
+    def record_hand_position(self, hand_x: float, hand_y: float) -> None:
+        """Record current hand position without triggering a window move."""
+        self._last_hand_x = hand_x
+        self._last_hand_y = hand_y
 
     def update_hand_position(
         self,
@@ -151,6 +182,8 @@ class WindowDragSession:
         # Skip redundant OS calls if position has not changed
         if target_x == self._last_win_x and target_y == self._last_win_y:
             self._last_update_time = now
+            self._last_hand_x = hand_x
+            self._last_hand_y = hand_y
             return False
 
         # Ensure window is restored if still zoomed on Windows
@@ -165,17 +198,151 @@ class WindowDragSession:
         if ok:
             self._last_win_x = target_x
             self._last_win_y = target_y
+            self._last_hand_x = hand_x
+            self._last_hand_y = hand_y
+            self._has_moved = True
             self._last_update_time = now
             logger.debug("Window %d moved to (%d, %d)", self._hwnd, target_x, target_y)
 
         return ok
 
-    def end_grab(self) -> None:
-        """Release the grabbed window, leaving it at its current position."""
-        if self._active:
-            logger.info("Window released at (%d, %d)", self._last_win_x, self._last_win_y)
-        self._active = False
-        self._target_info = None
+    def end_grab(
+        self,
+        hand_x: float | None = None,
+        hand_y: float | None = None,
+    ) -> str | None:
+        """Release the grabbed window, performing edge snap if near display edges.
+
+        Snapping rules:
+        - Left edge: snap window to left half of monitor work area.
+        - Right edge: snap window to right half of monitor work area.
+        - Top center: maximize window to full screen.
+        - Other areas: retain current position without resizing.
+
+        Returns:
+            Snap action name ('snap_left', 'snap_right', 'maximized', or None).
+        """
+        if not self._active:
+            return None
+
+        if hand_x is not None:
+            self._last_hand_x = hand_x
+        if hand_y is not None:
+            self._last_hand_y = hand_y
+
+        action: str | None = None
+        hwnd = self._hwnd
+
+        try:
+            has_dragged = (
+                self._has_moved
+                or abs(self._last_hand_x - self._initial_hand_x) > 20
+                or abs(self._last_hand_y - self._initial_hand_y) > 20
+            )
+
+            if has_dragged:
+                # Identify monitor where hand/window is released
+                monitor = self._desktop.get_monitor_for_point(self._last_hand_x, self._last_hand_y)
+                if not monitor:
+                    monitor = self._desktop.get_monitor_for_rect(
+                        (self._last_win_x, self._last_win_y, self._win_width, self._win_height)
+                    )
+                if not monitor:
+                    monitor = self._desktop.primary_monitor
+
+                if monitor:
+                    mw_left, mw_top, mw_right, mw_bottom = monitor.work_area
+                    mw_width = mw_right - mw_left
+                    mw_height = mw_bottom - mw_top
+
+                    snap_margin_x = max(120, int(mw_width * 0.10))
+                    snap_margin_y = max(80, int(mw_height * 0.08))
+
+                    is_left_snap = (
+                        self._last_hand_x <= mw_left + snap_margin_x
+                        or (
+                            self._last_win_x <= mw_left + 30
+                            and self._last_hand_x <= mw_left + int(mw_width * 0.35)
+                        )
+                    )
+
+                    is_right_snap = (
+                        self._last_hand_x >= mw_right - snap_margin_x
+                        or (
+                            (self._last_win_x + self._win_width) >= mw_right - 30
+                            and self._last_hand_x >= mw_right - int(mw_width * 0.35)
+                        )
+                    )
+
+                    is_top_hand = self._last_hand_y <= mw_top + snap_margin_y
+                    is_top_win = (
+                        self._last_win_y <= mw_top + 30
+                        and self._last_hand_y <= mw_top + int(mw_height * 0.35)
+                    )
+                    is_in_top = is_top_hand or is_top_win
+                    is_center_x = (
+                        (mw_left + snap_margin_x) < self._last_hand_x < (mw_right - snap_margin_x)
+                    )
+                    is_top_maximize = is_in_top and is_center_x
+
+                    if is_left_snap:
+                        snap_w = mw_width // 2
+                        if sys.platform == "win32" and ctypes.windll.user32.IsZoomed(hwnd):
+                            self._wm.restore_window(hwnd)
+                        self._wm.set_window_position(hwnd, mw_left, mw_top, snap_w, mw_height)
+                        self._last_win_x = mw_left
+                        self._last_win_y = mw_top
+                        action = "snap_left"
+                        logger.info(
+                            "Window %d snapped to LEFT half: (%d, %d, %d, %d)",
+                            hwnd,
+                            mw_left,
+                            mw_top,
+                            snap_w,
+                            mw_height,
+                        )
+                    elif is_right_snap:
+                        snap_w = mw_width // 2
+                        snap_x = mw_left + (mw_width - snap_w)
+                        if sys.platform == "win32" and ctypes.windll.user32.IsZoomed(hwnd):
+                            self._wm.restore_window(hwnd)
+                        self._wm.set_window_position(hwnd, snap_x, mw_top, snap_w, mw_height)
+                        self._last_win_x = snap_x
+                        self._last_win_y = mw_top
+                        action = "snap_right"
+                        logger.info(
+                            "Window %d snapped to RIGHT half: (%d, %d, %d, %d)",
+                            hwnd,
+                            snap_x,
+                            mw_top,
+                            snap_w,
+                            mw_height,
+                        )
+                    elif is_top_maximize:
+                        self._wm.maximize_window(hwnd)
+                        action = "maximized"
+                        logger.info("Window %d snapped to MAXIMIZED (full screen)", hwnd)
+                    else:
+                        logger.info(
+                            "Window %d released at (%d, %d)",
+                            hwnd,
+                            self._last_win_x,
+                            self._last_win_y,
+                        )
+            else:
+                logger.info(
+                    "Window %d released without movement at (%d, %d)",
+                    hwnd,
+                    self._last_win_x,
+                    self._last_win_y,
+                )
+        except Exception:
+            logger.exception("Error during window release snapping")
+        finally:
+            self._active = False
+            self._target_info = None
+
+        return action
 
     def cancel_grab(self) -> None:
         """Cancel drag (e.g. on hand loss or pause), leaving window at its current position."""

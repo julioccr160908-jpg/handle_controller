@@ -1185,9 +1185,36 @@ class MainWindow(QMainWindow):
                         if ext_count >= 2:
                             hand_is_open = True
 
+                synth_release_result: ActionResult | None = None
                 if is_drag_active and (hand_is_open or release_req is not None):
-                    drag_mgr.end_grab()
+                    rx: float | None = None
+                    ry: float | None = None
+                    if target_obs and len(target_obs.landmarks_normalized) > 0:
+                        lm = (
+                            target_obs.landmarks_normalized[9]
+                            if len(target_obs.landmarks_normalized) > 9
+                            else target_obs.landmarks_normalized[0]
+                        )
+                        rx, ry = self._region.map_normalized(lm.x, lm.y)
+
                     self._drag_hand = None
+                    if release_req is not None:
+                        if rx is not None and ry is not None:
+                            release_req.parameters["x"] = rx
+                            release_req.parameters["y"] = ry
+                    else:
+                        snap_action = drag_mgr.end_grab(rx, ry)
+                        reason = (
+                            f"Window released ({snap_action})"
+                            if snap_action
+                            else "Window released"
+                        )
+                        synth_release_result = ActionResult(
+                            action_name="window_release",
+                            status=ActionStatus.EXECUTED,
+                            reason=reason,
+                            timestamp=time.monotonic(),
+                        )
                 elif target_obs and len(target_obs.landmarks_normalized) > 0:
                     self._drag_hand = target_obs.handedness
                     self._drag_last_seen_time = hand_frame.timestamp
@@ -1231,6 +1258,8 @@ class MainWindow(QMainWindow):
 
                 t_action_start = time.monotonic()
                 action_results = self._controller.submit_many(requests)
+                if synth_release_result is not None:
+                    action_results.append(synth_release_result)
                 action_latency_ms = (time.monotonic() - t_action_start) * 1000
                 self._metrics.record_action_latency(action_latency_ms)
 
