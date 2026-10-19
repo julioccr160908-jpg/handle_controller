@@ -22,15 +22,33 @@ import numpy as np
 
 # On Windows, if the path contains non-ASCII characters (such as accents in folder names),
 # MediaPipe's C++ framework fails to locate graph files unless converted to 8.3 short paths.
+# When running inside PyInstaller, virtual/pyc files do not exist as standalone files,
+# so we locate the existing ancestor folder and build the short path from it.
 if sys.platform == "win32":
     try:
         import ctypes
+        import os
 
         import mediapipe.python.solution_base as _sb
 
-        _buf = ctypes.create_unicode_buffer(500)
-        if ctypes.windll.kernel32.GetShortPathNameW(_sb.__file__, _buf, 500):
-            _sb.__file__ = _buf.value
+        _target = os.path.abspath(_sb.__file__)
+        _parts_to_append: list[str] = []
+        _curr = _target
+        while _curr and not os.path.exists(_curr):
+            _curr, _tail = os.path.split(_curr)
+            if _tail:
+                _parts_to_append.append(_tail)
+            else:
+                break
+
+        if _curr and os.path.exists(_curr):
+            _buf = ctypes.create_unicode_buffer(1000)
+            if ctypes.windll.kernel32.GetShortPathNameW(_curr, _buf, 1000):
+                _short_base = _buf.value
+                if _parts_to_append:
+                    _sb.__file__ = os.path.join(_short_base, *reversed(_parts_to_append))
+                else:
+                    _sb.__file__ = _short_base
     except Exception:
         pass
 

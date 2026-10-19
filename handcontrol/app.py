@@ -27,6 +27,42 @@ def _set_dpi_awareness() -> None:
             ctypes.windll.user32.SetProcessDPIAware()
 
 
+def _fix_windows_mediapipe_path() -> None:
+    """Ensure MediaPipe package path uses 8.3 short format on Windows.
+
+    Solves FileNotFoundError in C++ calculator graph loader when folder names
+    contain non-ASCII characters (e.g. 'mapeamento_mãos' with 'ã'), both in
+    normal Python development and inside PyInstaller frozen binaries.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import os
+
+        import mediapipe.python.solution_base as sb
+
+        target = os.path.abspath(sb.__file__)
+        parts_to_append: list[str] = []
+        curr = target
+        while curr and not os.path.exists(curr):
+            curr, tail = os.path.split(curr)
+            if tail:
+                parts_to_append.append(tail)
+            else:
+                break
+
+        if curr and os.path.exists(curr):
+            buf = ctypes.create_unicode_buffer(1000)
+            if ctypes.windll.kernel32.GetShortPathNameW(curr, buf, 1000):
+                short_base = buf.value
+                if parts_to_append:
+                    sb.__file__ = os.path.join(short_base, *reversed(parts_to_append))
+                else:
+                    sb.__file__ = short_base
+    except Exception:
+        pass
+
+
 def _setup_logging() -> None:
     """Configure logging with console + rotating file handler.
 
@@ -70,6 +106,7 @@ def main() -> None:
     """Application entry point."""
     # DPI awareness must be set before QApplication.
     _set_dpi_awareness()
+    _fix_windows_mediapipe_path()
 
     _setup_logging()
     logger = logging.getLogger(__name__)
