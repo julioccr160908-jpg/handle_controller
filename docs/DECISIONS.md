@@ -43,3 +43,18 @@ Decisions that affect the architecture or deviate from obvious choices are recor
 - **Rationale:** On Windows, when the project or user workspace directory path contains non-ASCII characters (e.g. `mapeamento_mãos` with `ã`), MediaPipe's underlying C++ calculator graph loader uses narrow string paths and fails with `FileNotFoundError` when opening binarypb graph files. Converting the module path to its 8.3 short equivalent (e.g. `MAPEAM~1`) solves this completely and transparently without needing to rename any project folders.
 - **Date:** 2026-10-19
 
+## Phase 8
+
+### D007 — Stability Test Harness and Leak Detection Methodology
+
+- **Decision:** Implement an automated stability test runner (`handcontrol.metrics.stability`) that runs continuous synthetic hand tracking cycles across pointing, pinches, fist grabbing, and swipes at 30 FPS, monitoring memory growth via Windows PSAPI (`GetProcessMemoryInfo`) and Python `tracemalloc`.
+- **Rationale:** Section 11.2 requires measuring memory growth over 30 minutes without a continuous upward trend. Relying solely on manual 30-minute webcam sessions is inconvenient for automated CI and quick verification. The synthetic pipeline tests all states, hysteresis counters, mapping engines, and safety queues under identical load.
+- **Date:** 2026-10-19
+
+### D008 — Standalone Executable Packaging via PyInstaller
+
+- **Decision:** Package HandControl using PyInstaller in `onedir` mode (`dist/HandControl/HandControl.exe`) with `collect_all("mediapipe")` and `collect_all("PySide6")`.
+- **Rationale:** `onedir` launches instantly (~1 second) compared to `onefile`, which requires extracting >200MB of binaries and models into `%TEMP%` on every single boot. The Windows 8.3 short-path resolution implemented in D006 ensures MediaPipe calculators load models without ASCII path errors in both environments.
+- **Date:** 2026-10-19
+
+

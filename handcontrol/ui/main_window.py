@@ -519,6 +519,7 @@ class MainWindow(QMainWindow):
 
         self._fps_label = QLabel("FPS: —")
         self._latency_label = QLabel("Latência: — ms")
+        self._mem_label = QLabel("RAM: — MB")
         self._hands_label = QLabel("Mãos: —")
         self._gesture_label = QLabel("Gesto: —")
         self._action_label = QLabel("Ação: —")
@@ -527,6 +528,7 @@ class MainWindow(QMainWindow):
         for lbl in (
             self._fps_label,
             self._latency_label,
+            self._mem_label,
             self._hands_label,
             self._gesture_label,
             self._action_label,
@@ -883,6 +885,7 @@ class MainWindow(QMainWindow):
         self._video_label.setText("📷  Câmera parada")
         self._fps_label.setText("FPS: —")
         self._latency_label.setText("Latência: — ms")
+        self._mem_label.setText("RAM: — MB")
         self._hands_label.setText("Mãos: —")
         self._gesture_label.setText("Gesto: —")
         self._action_label.setText("Ação: —")
@@ -1068,7 +1071,10 @@ class MainWindow(QMainWindow):
                     ):
                         self._real_executor.window.drag.cancel_grab()
 
+                t_action_start = time.monotonic()
                 action_results = self._controller.submit_many(requests)
+                action_latency_ms = (time.monotonic() - t_action_start) * 1000
+                self._metrics.record_action_latency(action_latency_ms)
 
                 latency_ms = (time.monotonic() - capture_frame.timestamp) * 1000
                 self._metrics.record_frame()
@@ -1153,8 +1159,10 @@ class MainWindow(QMainWindow):
         # Update metrics.
         fps = self._metrics.fps
         latency = self._metrics.avg_latency_ms
+        mem = self._metrics.memory_rss_mb
         self._fps_label.setText(f"FPS: {fps:.1f}")
         self._latency_label.setText(f"Latência: {latency:.0f} ms")
+        self._mem_label.setText(f"RAM: {mem:.0f} MB")
 
         if not hand_frame.hands:
             self._hands_label.setText("Mãos: nenhuma")

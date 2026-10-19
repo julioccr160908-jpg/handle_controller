@@ -78,3 +78,30 @@ class TestPerformanceMetrics:
         for t in threads:
             t.join()
         # Reaching here without exceptions = pass
+
+    def test_action_latency(self):
+        m = PerformanceMetrics()
+        assert m.avg_action_latency_ms == 0.0
+        m.record_action_latency(2.0)
+        m.record_action_latency(4.0)
+        assert m.avg_action_latency_ms == 3.0
+
+    def test_queue_size_tracking(self):
+        m = PerformanceMetrics()
+        assert m.queue_size == 0
+        m.record_queue_size(1)
+        assert m.queue_size == 1
+
+    def test_memory_tracking_and_summary(self):
+        m = PerformanceMetrics()
+        summary = m.get_summary()
+        assert "fps" in summary
+        assert "pipeline_latency_ms" in summary
+        assert "action_latency_ms" in summary
+        assert "queue_size" in summary
+        assert "memory_rss_mb" in summary
+        assert "memory_private_mb" in summary
+        assert "memory_heap_mb" in summary
+        # Process memory should be non-negative (on Windows > 0)
+        assert m.memory_rss_mb >= 0.0
+        assert m.memory_heap_mb >= 0.0
