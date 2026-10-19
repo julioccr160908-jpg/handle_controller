@@ -11,16 +11,15 @@ hiddenimports = [
     "cv2",
     "pyautogui",
     "pywinctl",
+    "matplotlib",
     "handcontrol",
 ]
 
 excludes = [
     "tkinter",
-    "matplotlib",
     "IPython",
     "jupyter",
     "tornado",
-    "scipy",
     "PySide6.Qt3DAnimation",
     "PySide6.Qt3DCore",
     "PySide6.Qt3DExtras",
