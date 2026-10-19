@@ -138,11 +138,12 @@ _ALL_ACTIONS: list[ActionSpec] = [
         name="window_grab",
         description="Grab the active window for movement.",
         is_stateful=True,
-        optional_params=frozenset({"x", "y", "norm_x", "norm_y", "hwnd", "timestamp"}),
+        optional_params=frozenset({"x", "y", "norm_x", "norm_y", "hwnd", "timestamp", "hand"}),
     ),
     ActionSpec(
         name="window_release",
         description="Release the grabbed window.",
+        optional_params=frozenset({"hand"}),
     ),
     ActionSpec(
         name="window_minimize",

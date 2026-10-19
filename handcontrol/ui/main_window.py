@@ -1147,11 +1147,19 @@ class MainWindow(QMainWindow):
                     )
 
                 if target_obs is None and (grab_req is not None or not is_drag_active):
-                    # Identify candidate hand that initiated the fist
-                    req_hand = grab_req.parameters.get("hand") if grab_req else None
-                    if req_hand:
+                    # Check if a gesture event indicated which hand started the fist
+                    fist_ev = next(
+                        (
+                            ev
+                            for ev in gesture_events
+                            if ev.gesture_id == "fist"
+                            and ev.phase in (GesturePhase.STARTED, GesturePhase.HELD)
+                        ),
+                        None,
+                    )
+                    if fist_ev:
                         target_obs = next(
-                            (obs for obs in hand_frame.hands if obs.handedness == req_hand),
+                            (obs for obs in hand_frame.hands if obs.handedness == fist_ev.hand),
                             None,
                         )
                     if target_obs is None:
@@ -1194,11 +1202,12 @@ class MainWindow(QMainWindow):
                     lx, ly = self._region.map_normalized(lm.x, lm.y)
 
                     # Inject hand screen coordinates into window_grab request
-                    if grab_req is not None and "x" not in grab_req.parameters:
+                    if grab_req is not None:
                         grab_req.parameters["x"] = lx
                         grab_req.parameters["y"] = ly
                         if self._selected_hwnd:
                             grab_req.parameters["hwnd"] = self._selected_hwnd
+                        grab_req.parameters.pop("hand", None)
 
                     # If drag session is active, update window position smoothly
                     if (
@@ -1225,6 +1234,7 @@ class MainWindow(QMainWindow):
 
                 # If an explicit window_release request was fired, reset dragging hand
                 if release_req is not None:
+                    release_req.parameters.pop("hand", None)
                     self._drag_hand = None
 
                 # Also if drag_mgr ended or cancelled, reset drag hand

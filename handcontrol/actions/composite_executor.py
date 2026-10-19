@@ -94,11 +94,11 @@ class CompositeExecutor(BaseExecutor):
         if name in _WINDOW_ACTIONS:
             return self.window.execute(request)
 
-        if name == "noop":
+        if name in ("noop", "pause_commands"):
             return ActionResult(
                 action_name=name,
                 status=ActionStatus.EXECUTED,
-                reason="noop",
+                reason=name,
                 timestamp=time.monotonic(),
             )
 
