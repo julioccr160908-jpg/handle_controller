@@ -50,7 +50,6 @@ from handcontrol.capture.camera import CaptureThread
 from handcontrol.config.storage import ConfigManager
 from handcontrol.features.extractor import FeatureExtractor
 from handcontrol.gestures.engine import GestureEngine
-from handcontrol.gestures.state_machine import GestureState
 from handcontrol.mapping.profile import GestureMapper
 from handcontrol.metrics.performance import PerformanceMetrics
 from handcontrol.mouse.cursor import CursorController
@@ -61,6 +60,7 @@ from handcontrol.tracking.models import (
     ActionRequest,
     ActionResult,
     ActionStatus,
+    FingerState,
     GestureEvent,
     GesturePhase,
     HandFrame,
@@ -1139,58 +1139,56 @@ class MainWindow(QMainWindow):
 
                 # Determine which hand is grabbing or dragging
                 target_obs = None
-                if is_drag_active and self._drag_hand:
-                    # Maintain tracking on the same hand that started the drag
-                    target_obs = next(
-                        (obs for obs in hand_frame.hands if obs.handedness == self._drag_hand),
-                        None,
-                    )
-
-                if target_obs is None and (grab_req is not None or not is_drag_active):
-                    # Check if a gesture event indicated which hand started the fist
-                    fist_ev = next(
-                        (
-                            ev
-                            for ev in gesture_events
-                            if ev.gesture_id == "fist"
-                            and ev.phase in (GesturePhase.STARTED, GesturePhase.HELD)
-                        ),
-                        None,
-                    )
-                    if fist_ev:
+                if is_drag_active:
+                    # During active drag, stick to the dragging hand if present
+                    if self._drag_hand:
                         target_obs = next(
-                            (obs for obs in hand_frame.hands if obs.handedness == fist_ev.hand),
+                            (obs for obs in hand_frame.hands if obs.handedness == self._drag_hand),
                             None,
                         )
-                    if target_obs is None:
-                        # Find hand with fist gesture in ACTIVE, CANDIDATE or RELEASING state
-                        fist_hands = [
-                            obs
-                            for obs in hand_frame.hands
-                            if any(
-                                sm.state
-                                in (
-                                    GestureState.ACTIVE,
-                                    GestureState.CANDIDATE,
-                                    GestureState.RELEASING,
-                                )
-                                for (gid, h), sm in self._gesture_engine._machines.items()
-                                if gid == "fist" and h == obs.handedness
-                            )
-                        ]
-                        if fist_hands:
-                            # Prefer non-preferred hand if both made fist, else first
+                    # If handedness label flipped or single hand in frame, use the available hand!
+                    if target_obs is None and hand_frame.hands:
+                        target_obs = hand_frame.hands[0]
+                else:
+                    # Not yet dragging — find the hand initiating window grab
+                    if grab_req is not None:
+                        fist_ev = next(
+                            (
+                                ev
+                                for ev in gesture_events
+                                if ev.gesture_id == "fist"
+                                and ev.phase in (GesturePhase.STARTED, GesturePhase.HELD)
+                            ),
+                            None,
+                        )
+                        if fist_ev:
                             target_obs = next(
-                                (obs for obs in fist_hands if obs.handedness != pref_hand),
-                                fist_hands[0],
+                                (obs for obs in hand_frame.hands if obs.handedness == fist_ev.hand),
+                                None,
                             )
-                        elif hand_frame.hands:
+                        if target_obs is None and hand_frame.hands:
+                            # Prefer non-preferred hand if multiple hands present, else single hand
                             target_obs = next(
                                 (obs for obs in hand_frame.hands if obs.handedness != pref_hand),
                                 hand_frame.hands[0],
                             )
 
-                if target_obs and len(target_obs.landmarks_normalized) > 0:
+                # Check if the user naturally opened their hand to release the window
+                hand_is_open = False
+                if is_drag_active and target_obs:
+                    t_feat = features_by_hand.get(target_obs.handedness)
+                    if t_feat and t_feat.is_valid:
+                        # If index, middle, ring are extended, user opened the hand
+                        ext_count = sum(
+                            1 for s in t_feat.fingers_extended[1:4] if s == FingerState.EXTENDED
+                        )
+                        if ext_count >= 2:
+                            hand_is_open = True
+
+                if is_drag_active and (hand_is_open or release_req is not None):
+                    drag_mgr.end_grab()
+                    self._drag_hand = None
+                elif target_obs and len(target_obs.landmarks_normalized) > 0:
                     self._drag_hand = target_obs.handedness
                     self._drag_last_seen_time = hand_frame.timestamp
 
@@ -1219,23 +1217,13 @@ class MainWindow(QMainWindow):
                 else:
                     # Hand was temporarily lost
                     if is_drag_active:
-                        # Grace period: 0.40 seconds before cancelling the drag session
                         elapsed_lost = hand_frame.timestamp - self._drag_last_seen_time
-                        if elapsed_lost > 0.40:
+                        if elapsed_lost > 0.60:
                             drag_mgr.cancel_grab()
                             self._drag_hand = None
 
-                # Check if state machine for the dragging hand has returned to IDLE or COOLDOWN
-                if is_drag_active and self._drag_hand:
-                    hand_sm = self._gesture_engine._machines.get(("fist", self._drag_hand))
-                    if hand_sm and hand_sm.state in (GestureState.IDLE, GestureState.COOLDOWN):
-                        drag_mgr.end_grab()
-                        self._drag_hand = None
-
-                # If an explicit window_release request was fired, reset dragging hand
                 if release_req is not None:
                     release_req.parameters.pop("hand", None)
-                    self._drag_hand = None
 
                 # Also if drag_mgr ended or cancelled, reset drag hand
                 if drag_mgr is not None and not drag_mgr.is_active:
