@@ -83,6 +83,17 @@ def _default_configs() -> list[GestureConfig]:
             is_continuous=False,  # single-shot click
             priority=10,
         ),
+        GestureConfig(
+            gesture_id="pinch_sustained",
+            hand="Preferred",
+            enter_threshold=_PINCH_ENTER,
+            exit_threshold=_PINCH_EXIT,
+            min_confirm_time_s=0.40,  # spec: > 400 ms hold
+            min_release_time_s=0.04,
+            cooldown_s=0.10,
+            is_continuous=True,
+            priority=12,
+        ),
         # --- Left-hand gestures ---
         GestureConfig(
             gesture_id="fist",
@@ -257,7 +268,7 @@ class GestureEngine:
         if gid == "two_fingers":
             return rule_two_fingers(features)
 
-        if gid == "pinch_index":
+        if gid in ("pinch_index", "pinch_sustained"):
             key = (gid, self._resolve_hand(cfg.hand))
             sm = self._machines.get(key)
             currently = sm is not None and sm.is_active
@@ -288,8 +299,8 @@ class GestureEngine:
         if features.velocity:
             payload["vx"] = features.velocity[0]
             payload["vy"] = features.velocity[1]
-        if cfg.gesture_id in ("pinch_index", "pinch_middle"):
-            dist_key = "thumb_index" if cfg.gesture_id == "pinch_index" else "thumb_middle"
+        if cfg.gesture_id in ("pinch_index", "pinch_middle", "pinch_sustained"):
+            dist_key = "thumb_index" if cfg.gesture_id != "pinch_middle" else "thumb_middle"
             dist = features.normalized_distances.get(dist_key, 0.0)
             payload["pinch_dist"] = dist
         return payload

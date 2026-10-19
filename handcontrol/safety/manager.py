@@ -45,6 +45,23 @@ class SafetyManager:
         """True while all actions are simulated (no OS interaction)."""
         return self._simulation_mode
 
+    def enable_real_mode(self, real_executor: object) -> None:
+        """Switch from simulation mode to real commands execution."""
+        from handcontrol.actions.base import BaseExecutor
+
+        if isinstance(real_executor, BaseExecutor):
+            self._simulation_mode = False
+            self._controller.swap_executor(real_executor)
+            logger.info("Real commands mode enabled")
+
+    def enable_simulation_mode(self) -> None:
+        """Switch back to simulation mode (safe default)."""
+        from handcontrol.actions.simulation import SimulatedExecutor
+
+        self._simulation_mode = True
+        self._controller.swap_executor(SimulatedExecutor())
+        logger.info("Simulation mode enabled")
+
     @property
     def commands_paused(self) -> bool:
         """True while gesture commands are suppressed."""

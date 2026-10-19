@@ -50,6 +50,10 @@ _ALL_ACTIONS: list[ActionSpec] = [
         description="Single middle mouse button click.",
     ),
     ActionSpec(
+        name="click_double",
+        description="Double left mouse button click.",
+    ),
+    ActionSpec(
         name="drag_start",
         description="Press and hold left mouse button (begin drag).",
         is_stateful=True,
@@ -66,8 +70,8 @@ _ALL_ACTIONS: list[ActionSpec] = [
     ),
     ActionSpec(
         name="cursor_move",
-        description="Move the cursor to a normalized position.",
-        required_params=frozenset({"norm_x", "norm_y"}),
+        description="Move the cursor in virtual screen or normalized coordinates.",
+        optional_params=frozenset({"norm_x", "norm_y", "x", "y"}),
     ),
     # --- Window management ---
     ActionSpec(

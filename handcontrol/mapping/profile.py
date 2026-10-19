@@ -92,14 +92,40 @@ def default_profile() -> list[MappingRule]:
             repeat_limit=1,
             trigger_phase=GesturePhase.STARTED,
         ),
-        # Two fingers (held, vertical scroll handled by cursor controller in Phase 4).
+        # Pinch sustained → drag (started = drag_start, ended/cancelled = drag_end).
+        MappingRule(
+            gesture_id="pinch_sustained",
+            action_name="drag_start",
+            hand="Right",
+            priority=12,
+            cooldown_s=0.10,
+            repeat_limit=1,
+            trigger_phase=GesturePhase.STARTED,
+        ),
+        MappingRule(
+            gesture_id="pinch_sustained",
+            action_name="drag_end",
+            hand="Right",
+            priority=12,
+            cooldown_s=0.0,
+            trigger_phase=GesturePhase.ENDED,
+        ),
+        MappingRule(
+            gesture_id="pinch_sustained",
+            action_name="drag_end",
+            hand="Right",
+            priority=12,
+            cooldown_s=0.0,
+            trigger_phase=GesturePhase.CANCELLED,
+        ),
+        # Two fingers (held) → vertical scroll.
         MappingRule(
             gesture_id="two_fingers",
-            action_name="noop",
+            action_name="scroll",
             hand="Right",
             priority=2,
-            cooldown_s=0.0,
-            trigger_phase=GesturePhase.STARTED,
+            cooldown_s=0.08,
+            trigger_phase=GesturePhase.HELD,
         ),
         # Fist left → window grab (stateful: hold to move).
         MappingRule(
@@ -236,6 +262,12 @@ class GestureMapper:
 
         # Build request.
         params = dict(rule.parameters)
+        if rule.action_name == "scroll" and "delta_y" not in params:
+            vy = event.payload.get("vy", 0.0)
+            if abs(vy) > 0.03:
+                params["delta_y"] = 1 if vy < 0 else -1
+            else:
+                return []
         self._last_fired[key] = now
 
         request = ActionRequest(
