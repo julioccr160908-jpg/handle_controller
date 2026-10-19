@@ -8,9 +8,14 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+from handcontrol.tracking.mediapipe_runtime import prepare_mediapipe_resources
+
+_qt_dll_directory_handles: list[object] = []
 
 
 def _set_dpi_awareness() -> None:
@@ -28,39 +33,41 @@ def _set_dpi_awareness() -> None:
 
 
 def _fix_windows_mediapipe_path() -> None:
-    """Ensure MediaPipe package path uses 8.3 short format on Windows.
+    """Ensure MediaPipe package resources use a Windows-safe path.
 
-    Solves FileNotFoundError in C++ calculator graph loader when folder names
-    contain non-ASCII characters (e.g. 'mapeamento_mãos' with 'ã'), both in
-    normal Python development and inside PyInstaller frozen binaries.
+    Solves FileNotFoundError in the C++ calculator graph loader when folders
+    contain non-ASCII characters (e.g. 'mapeamento_mãos' with 'ã'), including
+    machines where NTFS 8.3 aliases are disabled.
     """
-    if sys.platform != "win32":
+    prepare_mediapipe_resources()
+
+
+def _prepare_qt_dll_search_path() -> None:
+    """Prioritize the Qt DLLs bundled beside a frozen executable.
+
+    Qt extension modules link against generic names such as ``Qt6Core.dll``.
+    If another program has added a different Qt version to ``PATH``, Windows
+    may resolve that DLL first and report "procedure not found" when
+    ``QtWidgets`` imports.  ``add_dll_directory`` supplies a deterministic,
+    process-local search location before PySide6 is imported.
+    """
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
         return
-    try:
-        import os
 
-        import mediapipe.python.solution_base as sb
+    bundle_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent / "_internal"))
+    native_dirs = (bundle_dir / "PySide6", bundle_dir / "shiboken6", bundle_dir)
+    valid_dirs = [directory for directory in native_dirs if directory.is_dir()]
 
-        target = os.path.abspath(sb.__file__)
-        parts_to_append: list[str] = []
-        curr = target
-        while curr and not os.path.exists(curr):
-            curr, tail = os.path.split(curr)
-            if tail:
-                parts_to_append.append(tail)
-            else:
-                break
+    for directory in valid_dirs:
+        try:
+            # Keep the returned handles alive for the whole process.
+            _qt_dll_directory_handles.append(os.add_dll_directory(str(directory)))
+        except OSError:
+            logging.getLogger(__name__).warning("Unable to add Qt DLL directory: %s", directory)
 
-        if curr and os.path.exists(curr):
-            buf = ctypes.create_unicode_buffer(1000)
-            if ctypes.windll.kernel32.GetShortPathNameW(curr, buf, 1000):
-                short_base = buf.value
-                if parts_to_append:
-                    sb.__file__ = os.path.join(short_base, *reversed(parts_to_append))
-                else:
-                    sb.__file__ = short_base
-    except Exception:
-        pass
+    # Some Qt plugins use PATH rather than the modern DLL-directory API.
+    if valid_dirs:
+        os.environ["PATH"] = os.pathsep.join([*(str(path) for path in valid_dirs), os.environ["PATH"]])
 
 
 def _setup_logging() -> None:
@@ -107,6 +114,7 @@ def main() -> None:
     # DPI awareness must be set before QApplication.
     _set_dpi_awareness()
     _fix_windows_mediapipe_path()
+    _prepare_qt_dll_search_path()
 
     _setup_logging()
     logger = logging.getLogger(__name__)

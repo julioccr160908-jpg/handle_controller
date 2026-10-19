@@ -38,6 +38,8 @@ class CaptureThread:
         camera_index: OpenCV camera device index.
         width: Requested capture width in pixels.
         height: Requested capture height in pixels.
+        fps: Requested capture rate.  The driver may choose the closest
+            supported rate.
     """
 
     def __init__(
@@ -45,10 +47,12 @@ class CaptureThread:
         camera_index: int = 0,
         width: int = 640,
         height: int = 480,
+        fps: int = 30,
     ) -> None:
         self._camera_index = camera_index
         self._width = width
         self._height = height
+        self._fps = fps
 
         self._cap: cv2.VideoCapture | None = None
         self._latest_frame: CaptureFrame | None = None
@@ -92,17 +96,21 @@ class CaptureThread:
 
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+            self._cap.set(cv2.CAP_PROP_FPS, self._fps)
             # Minimize internal OpenCV buffer to reduce latency.
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            actual_fps = self._cap.get(cv2.CAP_PROP_FPS)
             logger.info(
-                "Camera opened: %dx%d (requested %dx%d)",
+                "Camera opened: %dx%d @ %.1f FPS (requested %dx%d @ %d FPS)",
                 actual_w,
                 actual_h,
+                actual_fps,
                 self._width,
                 self._height,
+                self._fps,
             )
 
             self._running = True

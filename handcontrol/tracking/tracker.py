@@ -15,45 +15,12 @@ This decision is documented in ``docs/DECISIONS.md`` (D002).
 from __future__ import annotations
 
 import logging
-import sys
 
 import cv2
+import mediapipe as mp
 import numpy as np
 
-# On Windows, if the path contains non-ASCII characters (such as accents in folder names),
-# MediaPipe's C++ framework fails to locate graph files unless converted to 8.3 short paths.
-# When running inside PyInstaller, virtual/pyc files do not exist as standalone files,
-# so we locate the existing ancestor folder and build the short path from it.
-if sys.platform == "win32":
-    try:
-        import ctypes
-        import os
-
-        import mediapipe.python.solution_base as _sb
-
-        _target = os.path.abspath(_sb.__file__)
-        _parts_to_append: list[str] = []
-        _curr = _target
-        while _curr and not os.path.exists(_curr):
-            _curr, _tail = os.path.split(_curr)
-            if _tail:
-                _parts_to_append.append(_tail)
-            else:
-                break
-
-        if _curr and os.path.exists(_curr):
-            _buf = ctypes.create_unicode_buffer(1000)
-            if ctypes.windll.kernel32.GetShortPathNameW(_curr, _buf, 1000):
-                _short_base = _buf.value
-                if _parts_to_append:
-                    _sb.__file__ = os.path.join(_short_base, *reversed(_parts_to_append))
-                else:
-                    _sb.__file__ = _short_base
-    except Exception:
-        pass
-
-import mediapipe as mp
-
+from handcontrol.tracking.mediapipe_runtime import prepare_mediapipe_resources
 from handcontrol.tracking.models import (
     HandFrame,
     HandObservation,
@@ -81,19 +48,33 @@ class HandTracker:
         max_hands: int = 2,
         min_detection_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5,
+        model_complexity: int = 0,
+        inference_width: int = 480,
     ) -> None:
+        if model_complexity not in (0, 1):
+            raise ValueError("model_complexity must be 0 (fast) or 1 (full)")
+        if inference_width < 160:
+            raise ValueError("inference_width must be at least 160 pixels")
+        prepare_mediapipe_resources()
         self._mp_hands = mp.solutions.hands
         self._hands = self._mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=max_hands,
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
+            model_complexity=model_complexity,
         )
         self._mp_drawing = mp.solutions.drawing_utils
         self._mp_drawing_styles = mp.solutions.drawing_styles
+        self._inference_width = inference_width
+        self._landmark_style = self._mp_drawing_styles.get_default_hand_landmarks_style()
+        self._connection_style = self._mp_drawing_styles.get_default_hand_connections_style()
         logger.info(
-            "HandTracker initialized: max_hands=%d, det_conf=%.2f, track_conf=%.2f",
+            "HandTracker initialized: max_hands=%d, complexity=%d, inference_width=%d, "
+            "det_conf=%.2f, track_conf=%.2f",
             max_hands,
+            model_complexity,
+            inference_width,
             min_detection_confidence,
             min_tracking_confidence,
         )
@@ -119,8 +100,20 @@ class HandTracker:
         flipped = cv2.flip(bgr_frame, 1)
         h, w = flipped.shape[:2]
 
+        # Landmark coordinates are normalized, so inference can run at a
+        # smaller resolution while the preview and its overlay remain sharp.
+        # This is a substantial CPU saving on integrated graphics/older CPUs.
+        inference_frame = flipped
+        if w > self._inference_width:
+            scale = self._inference_width / w
+            inference_frame = cv2.resize(
+                flipped,
+                (self._inference_width, max(1, round(h * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
         # MediaPipe expects RGB input.
-        rgb = cv2.cvtColor(flipped, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(inference_frame, cv2.COLOR_BGR2RGB)
         rgb.flags.writeable = False
         results = self._hands.process(rgb)
         rgb.flags.writeable = True
@@ -171,8 +164,8 @@ class HandTracker:
                     annotated,
                     hand_landmarks,
                     self._mp_hands.HAND_CONNECTIONS,
-                    self._mp_drawing_styles.get_default_hand_landmarks_style(),
-                    self._mp_drawing_styles.get_default_hand_connections_style(),
+                    self._landmark_style,
+                    self._connection_style,
                 )
 
         return hand_frame, annotated

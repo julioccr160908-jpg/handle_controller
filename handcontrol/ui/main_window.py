@@ -69,7 +69,11 @@ from handcontrol.ui.tray import SystemTrayController
 
 logger = logging.getLogger(__name__)
 
-_MAX_DISPLAY_FPS = 30
+# Rendering the preview is intentionally less frequent than hand processing.
+# It keeps the interface responsive on integrated GPUs without adding gesture
+# latency; the processing pipeline continues at up to 30 FPS.
+_MAX_DISPLAY_FPS = 20
+_MAX_PROCESSING_FPS = 30
 _HISTORY_MAX_ROWS = 60
 
 
@@ -160,8 +164,17 @@ class MainWindow(QMainWindow):
         )
         self._cursor_controller = CursorController(region=self._region)
 
+        # --- configuration & profiles (must be loaded before the camera) ---
+        self.config_manager = ConfigManager()
+        cfg = self.config_manager.config
+
         # --- pipeline components ---
-        self._capture = CaptureThread()
+        self._capture = CaptureThread(
+            camera_index=cfg.settings.camera_id,
+            width=cfg.settings.camera_width,
+            height=cfg.settings.camera_height,
+            fps=cfg.settings.camera_fps,
+        )
         self._tracker = HandTracker()
         self._extractor = FeatureExtractor()
         self._gesture_engine = GestureEngine()
@@ -178,10 +191,8 @@ class MainWindow(QMainWindow):
         self._confirmed_real_mode_in_session = False
         self._selected_hwnd: int = 0
         self._is_quitting = False
+        self._processing_interval_s = 1.0 / min(cfg.settings.camera_fps, _MAX_PROCESSING_FPS)
 
-        # --- configuration & profiles (Phase 7) ---
-        self.config_manager = ConfigManager()
-        cfg = self.config_manager.config
         self._gesture_engine.preferred_hand = cfg.settings.preferred_hand
         self._cursor_controller.config.dead_zone_px = cfg.settings.dead_zone_px
         self._cursor_controller.smoother.filter_x.min_cutoff = cfg.settings.smoothing_min_cutoff
@@ -864,8 +875,20 @@ class MainWindow(QMainWindow):
         # Re-create pipeline for next start.
         self._tracker = HandTracker()
         self._extractor = FeatureExtractor()
-        self._gesture_engine = GestureEngine()
+        self._gesture_engine = GestureEngine(
+            preferred_hand=self.config_manager.config.settings.preferred_hand
+        )
         self._mapper = GestureMapper()
+        active_profile = next(
+            (
+                profile
+                for profile in self.config_manager.config.profiles
+                if profile.profile_id == self.config_manager.config.active_profile_id
+            ),
+            None,
+        )
+        if active_profile is not None:
+            self._mapper.load_from_profile_model(active_profile)
         self._controller = ActionController()
         if not self._safety.simulation_mode:
             self._controller.swap_executor(self._real_executor)
@@ -921,6 +944,7 @@ class MainWindow(QMainWindow):
         """
         logger.info("Processing loop started")
         last_frame_id = -1
+        last_processed_at = 0.0
 
         while self._processing:
             if self._capture.error and not self._capture.is_running:
@@ -940,7 +964,18 @@ class MainWindow(QMainWindow):
                 time.sleep(0.001)
                 continue
 
+            # Some cameras ignore CAP_PROP_FPS and deliver 60+ frames per
+            # second.  Process only the newest frame at the configured rate;
+            # this preserves low latency while keeping one CPU core from
+            # being saturated by redundant MediaPipe calls.
+            now = time.monotonic()
+            remaining = self._processing_interval_s - (now - last_processed_at)
+            if remaining > 0:
+                time.sleep(min(remaining, 0.005))
+                continue
+
             last_frame_id = capture_frame.frame_id
+            last_processed_at = now
 
             try:
                 # Phase 1: tracking.
@@ -1152,7 +1187,7 @@ class MainWindow(QMainWindow):
         scaled = pixmap.scaled(
             self._video_label.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
         self._video_label.setPixmap(scaled)
 

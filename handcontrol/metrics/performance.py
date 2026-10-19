@@ -83,7 +83,7 @@ class PerformanceMetrics:
         enable_tracemalloc: Whether to initialize tracemalloc for Python heap tracking.
     """
 
-    def __init__(self, window_size: int = 60, enable_tracemalloc: bool = True) -> None:
+    def __init__(self, window_size: int = 60, enable_tracemalloc: bool = False) -> None:
         self._window_size = window_size
         self._frame_times: deque[float] = deque(maxlen=window_size)
         self._latencies: deque[float] = deque(maxlen=window_size)

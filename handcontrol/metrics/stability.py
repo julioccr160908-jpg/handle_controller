@@ -95,7 +95,9 @@ class StabilityTestRunner:
     """Executes long-running stability testing on the full gesture/mapping/action pipeline."""
 
     def __init__(self) -> None:
-        self.metrics = PerformanceMetrics()
+        # Detailed allocation tracing is useful for this offline diagnostic,
+        # but is deliberately disabled in the real-time application.
+        self.metrics = PerformanceMetrics(enable_tracemalloc=True)
         self.extractor = FeatureExtractor()
         self.engine = GestureEngine()
         self.allowlist = Allowlist()
